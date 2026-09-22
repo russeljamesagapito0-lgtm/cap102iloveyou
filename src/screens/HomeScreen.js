@@ -1,7 +1,7 @@
 // src/screens/HomeScreen.js
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  View,
+ View,
   Text,
   StyleSheet,
   TouchableOpacity,

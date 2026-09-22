@@ -1,13 +1,17 @@
-{
+﻿{
   "expo": {
     "name": "RootCare",
     "slug": "rootcare",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "icon": "./assets/icon.png",
+    "assetBundlePatterns": ["**/*"],
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0D631B"
+    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.rootcare.app"
@@ -15,6 +19,10 @@
     "android": {
       "package": "com.rootcare.app",
       "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0D631B"
+      },
       "permissions": [
         "android.permission.RECORD_AUDIO",
         "android.permission.CAMERA",
@@ -37,9 +45,7 @@
     "extra": {
       "supabaseUrl": "https://uevzwcidvqkcwickytuf.supabase.co",
       "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVldnp3Y2lkdnFrY3dpY2t5dHVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgxNTA4NTIsImV4cCI6MjEwMzcyNjg1Mn0.K3rDYYU53cNYEsd4Logn3xCKPU7QM-t5uX2Y_BJwBHo",
-      "eas": {
-        "projectId": "4ed0d848-f794-4803-b9e5-b0c1c0f7c2ab"
-      }
+      "eas": { "projectId": "4ed0d848-f794-4803-b9e5-b0c1c0f7c2ab" }
     }
   }
 }
