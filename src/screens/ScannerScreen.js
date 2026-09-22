@@ -17,23 +17,46 @@ import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as FileSystem from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
 import { useFocusEffect } from '@react-navigation/native';
+import NetInfo from '@react-native-community/netinfo';
+
+import { runOfflineInference, loadOfflineModel } from '../utils/offlineInference';
+import { enqueueMutation, generateScanId, flushQueue } from '../utils/syncManager';
+import { DISEASE_INFO } from '../constants/diseaseInfo';
 
 const { width, height } = Dimensions.get('window');
 
 // ===== API CONFIGURATION =====
-const COMPUTER_IP = '192.168.100.31'; 
-const API_URL = `http://${COMPUTER_IP}:5000/predict`;
-const HEALTH_URL = `http://${COMPUTER_IP}:5000/health`;
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://172.167.134.221:5000';
+const API_URL = `${API_BASE_URL}/predict`;
+const HEALTH_URL = `${API_BASE_URL}/health`;
+const TIMEOUT = parseInt(process.env.EXPO_PUBLIC_API_TIMEOUT || '30000');
+const MAX_RETRIES = parseInt(process.env.EXPO_PUBLIC_MAX_RETRIES || '3');
+const DEBUG = process.env.EXPO_PUBLIC_DEBUG === 'true';
 
-const fetchWithTimeout = (url, options = {}, timeout = 10000) => {
+const COMPUTER_IP = API_BASE_URL.replace('http://', '').replace(':5000', '');
+
+if (DEBUG) {
+  console.log('🔧 API Base URL:', API_BASE_URL);
+  console.log('🔗 API URL:', API_URL);
+  console.log('💚 Health URL:', HEALTH_URL);
+}
+
+const fetchWithTimeout = (url, options = {}, timeout = TIMEOUT) => {
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Request timed out')), timeout);
     fetch(url, options)
-      .then(response => { clearTimeout(timer); resolve(response); })
-      .catch(error => { clearTimeout(timer); reject(error); });
+      .then((response) => {
+        clearTimeout(timer);
+        resolve(response);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
   });
 };
 
@@ -43,34 +66,60 @@ const ScannerScreen = ({ navigation, route }) => {
   const [isApiReady, setIsApiReady] = useState(false);
   const [apiCheckDone, setApiCheckDone] = useState(false);
   const [flashEnabled, setFlashEnabled] = useState(false);
-  
+  const [retryCount, setRetryCount] = useState(0);
+
+  // Offline state
+  const [offlineReady, setOfflineReady] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
+
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
 
   const scanLineAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
+  // ===== Init animations + health check + offline model preload =====
   useEffect(() => {
     startScanLineAnimation();
     startPulseAnimation();
     checkApiHealth();
+
+    // Preload offline model (non-blocking)
+    loadOfflineModel()
+      .then(() => setOfflineReady(true))
+      .catch((err) => console.warn('⚠️ Offline model unavailable:', err?.message));
+
+    // Connectivity listener — auto-flush when back online
+    let wasConnected = true;
+    const unsub = NetInfo.addEventListener((state) => {
+      const connected = !!state.isConnected && state.isInternetReachable !== false;
+      setIsOnline(connected);
+
+      if (connected && !wasConnected) {
+        if (DEBUG) console.log('🌐 Back online — flushing sync queue');
+        flushQueue()
+          .then((res) => {
+            if (res?.flushed > 0 && DEBUG) console.log('✅ Queue flushed:', res);
+          })
+          .catch((e) => console.warn('Queue flush failed:', e));
+      }
+      wasConnected = connected;
+    });
+
+    return () => unsub();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // ===== FIX: ALWAYS RESET TO BLANK WHEN FOCUSED =====
   useFocusEffect(
     useCallback(() => {
-      // 1. Reset immediately when the screen is focused
       setImage(null);
       setLoading(false);
       setFlashEnabled(false);
 
-      // 2. Also check if ResultScreen sent a specific "clear" request
       if (route.params?.clearImage) {
-        // Clear the param so it doesn't continuously reset future scans
         navigation.setParams({ clearImage: undefined });
       }
 
-      // 3. Also reset when losing focus (leaving to Home/Result)
       const unsubscribe = navigation.addListener('blur', () => {
         setImage(null);
         setLoading(false);
@@ -81,20 +130,42 @@ const ScannerScreen = ({ navigation, route }) => {
     }, [navigation, route.params?.clearImage])
   );
 
-  const checkApiHealth = async () => {
-    try {
-      const response = await fetchWithTimeout(HEALTH_URL, { method: 'GET' }, 5000);
-      if (response.ok) {
-        setIsApiReady(true);
-        setApiCheckDone(true);
-      } else {
-        throw new Error('Server error');
-      }
-    } catch (error) {
-      setIsApiReady(false);
+const checkApiHealth = async (attempt = 0) => {
+  if (DEBUG) console.log('🔍 Checking API health (attempt ' + (attempt + 1) + '):', HEALTH_URL);
+  try {
+    const response = await fetchWithTimeout(HEALTH_URL, { method: 'GET' }, 5000); // 5s instead of 30s
+    if (response.ok) {
+      const data = await response.json();
+      if (DEBUG) console.log('✅ Server healthy:', data);
+      setIsApiReady(true);
       setApiCheckDone(true);
+      setRetryCount(0);
+      return true;
     }
-  };
+    throw new Error('Server error');
+  } catch (error) {
+    if (DEBUG) console.log('ℹ️ Server unreachable:', error?.message);
+
+    if (attempt < MAX_RETRIES) {
+      setRetryCount(attempt + 1);
+      setTimeout(() => checkApiHealth(attempt + 1), 2000);
+      return false;
+    }
+
+    setIsApiReady(false);
+    setApiCheckDone(true);
+
+    // Show info toast only ONCE, on final failure
+    Toast.show({
+      type: 'info',
+      text1: '📴 Offline Mode Active',
+      text2: 'Server unreachable. Offline scanning is ready.',
+      visibilityTime: 3000,
+    });
+
+    return false;
+  }
+};
 
   const startScanLineAnimation = () => {
     scanLineAnim.setValue(0);
@@ -115,6 +186,7 @@ const ScannerScreen = ({ navigation, route }) => {
     ).start();
   };
 
+  // ===== Image → base64 (for online request) =====
   const preprocessImage = async (imageUri) => {
     const manipulatedImage = await ImageManipulator.manipulateAsync(
       imageUri,
@@ -131,73 +203,177 @@ const ScannerScreen = ({ navigation, route }) => {
     });
   };
 
+  // ===== Navigate to Result with unified payload =====
+  const navigateToResult = (result, imageUri) => {
+    navigation.navigate('Result', {
+      imageUri,
+      diseaseKey: result.diseaseKey || 'UNKNOWN',
+      diseaseLabel: result.diseaseName || 'Unknown Disease',
+      confidence: result.confidence || 0,
+      scanDate: new Date().toISOString(),
+      description: result.description || 'No description available.',
+      treatment: result.treatment || 'No treatment information available.',
+      prevention: result.prevention || 'No prevention information available.',
+      severity: result.severity || 'Unknown',
+      symptoms: result.symptoms || 'No symptoms listed.',
+      allProbabilities: result.allProbabilities || {},
+      detectionMetrics: result.detection_metrics || {},
+      offline: !!result._offline,
+    });
+  };
+
+  // ===== Queue offline scan for later sync =====
+  const queueOfflineScan = async (imageUri, result) => {
+    try {
+      const base64Image = await FileSystem.readAsStringAsync(imageUri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const scanId = generateScanId();
+      await enqueueMutation({
+        type: 'CREATE_SCAN',
+        scanId,
+        payload: {
+          imageBase64: base64Image,
+          cropType: 'cassava',
+          capturedAt: new Date().toISOString(),
+          diagnosisCode: result.diseaseKey,
+          confidence: result.confidence,
+          modelVersion: 'resnet50v2-tflite-v1',
+          inferredAt: new Date().toISOString(),
+        },
+      });
+      if (DEBUG) console.log('📥 Offline scan queued:', scanId);
+    } catch (e) {
+      console.warn('Failed to queue offline scan:', e);
+    }
+  };
+
+  // ===== MAIN: analyze (online → offline fallback) =====
   const analyzeImage = async () => {
     if (!image) {
-      Toast.show({ type: 'error', text1: 'No Image', text2: 'Please take a photo or upload an image first.' });
+      Toast.show({
+        type: 'error',
+        text1: 'No Image',
+        text2: 'Please take a photo or upload an image first.',
+      });
       return;
-    }
-    if (!isApiReady) {
-      await checkApiHealth();
-      if (!isApiReady) {
-        Toast.show({ type: 'error', text1: 'Server Not Ready', text2: 'Please wait for the AI server to connect.' });
-        return;
-      }
     }
 
     setLoading(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    try {
-      const base64Image = await preprocessImage(image);
-      const response = await fetchWithTimeout(
-        API_URL,
-        {
+    // ===== TRY ONLINE FIRST =====
+    if (isApiReady && isOnline) {
+      try {
+        const base64Image = await preprocessImage(image);
+        if (DEBUG) console.log('📤 Sending request to:', API_URL);
+
+        const response = await fetchWithTimeout(API_URL, {
           method: 'POST',
-          headers: { 'Accept': 'application/json', 'Content-Type': 'application/json' },
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
           body: JSON.stringify({ image: base64Image }),
-        },
-        30000
-      );
+        });
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Analysis failed');
+        if (DEBUG) console.log('📥 Response status:', response.status);
+
+        if (!response.ok) {
+          let errMsg = 'Analysis failed';
+          try {
+            const errorData = await response.json();
+            errMsg = errorData.error || errMsg;
+          } catch (_) {}
+          throw new Error(errMsg);
+        }
+
+        const result = await response.json();
+        if (DEBUG) console.log('✅ Analysis result:', result);
+
+        if (result.success === false && result.error === 'not_cassava') {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          Toast.show({
+            type: 'info',
+            text1: 'Not a Cassava Leaf',
+            text2: result.message || 'Please upload a clear image of a cassava leaf.',
+          });
+          setLoading(false);
+          return;
+        }
+
+        if (result.success) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          navigateToResult(result, image);
+          setLoading(false);
+          return;
+        }
+
+        throw new Error(result.message || 'Invalid response from server');
+      } catch (error) {
+        console.warn('⚠️ Online analysis failed, falling back to offline:', error?.message);
+        // fall through to offline
       }
+    }
 
-      const result = await response.json();
+    // ===== OFFLINE FALLBACK =====
+    if (!offlineReady) {
+      setLoading(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Toast.show({
+        type: 'error',
+        text1: 'Offline Unavailable',
+        text2: 'Model not loaded yet. Please check your connection and try again.',
+        visibilityTime: 4000,
+      });
+      return;
+    }
+
+    try {
+      const result = await runOfflineInference(image);
 
       if (result.success === false && result.error === 'not_cassava') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-        Toast.show({ type: 'error', text1: 'Not a Cassava Leaf', text2: result.message || 'Please upload a clear image of a cassava leaf.' });
+        Toast.show({
+          type: 'info',
+          text1: 'Not a Cassava Leaf',
+          text2: result.message,
+          visibilityTime: 4000,
+        });
         setLoading(false);
         return;
       }
 
-      if (result.success) {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        navigation.navigate('Result', {
-          imageUri: image,
-          diseaseKey: result.diseaseKey || 'UNKNOWN',
-          diseaseLabel: result.diseaseName || 'Unknown Disease',
-          confidence: result.confidence || 0,
-          scanDate: new Date().toISOString(),
-          description: result.description || 'No description available.',
-          treatment: result.treatment || 'No treatment information available.',
-          prevention: result.prevention || 'No prevention information available.',
-          severity: result.severity || 'Unknown',
-          symptoms: result.symptoms || 'No symptoms listed.',
-          allProbabilities: result.allProbabilities || {},
-          detectionMetrics: result.detection_metrics || {},
-        });
-      } else {
-        throw new Error(result.message || 'Invalid response from server');
-      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // Enrich with local disease info (server normally provides this)
+      const info = DISEASE_INFO[result.diseaseKey];
+      const enriched = {
+        ...result,
+        description: info?.description || '',
+        treatment: info?.treatment || '',
+        prevention: info?.prevention || '',
+        severity: info?.severity || 'Unknown',
+        symptoms: info?.symptoms || '',
+      };
+
+      // Queue for later sync
+      await queueOfflineScan(image, result);
+
+      Toast.show({
+        type: 'info',
+        text1: '📴 Offline Result',
+        text2: 'Saved locally — will sync when online.',
+        visibilityTime: 3000,
+      });
+
+      navigateToResult(enriched, image);
     } catch (error) {
-      let errorMessage = 'There was an error analyzing the image.';
-      if (error.message.includes('Network request failed')) errorMessage = 'Cannot reach server. Check your network connection!';
-      else if (error.message.includes('timed out')) errorMessage = 'Server took too long to respond. Try again.';
-      else if (error.message) errorMessage = error.message;
-      Toast.show({ type: 'error', text1: 'Analysis Failed', text2: errorMessage, visibilityTime: 5000 });
+      console.error('❌ Offline inference failed:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Toast.show({
+        type: 'error',
+        text1: 'Analysis Failed',
+        text2: 'Both online and offline analysis failed. Please try again.',
+        visibilityTime: 5000,
+      });
     } finally {
       setLoading(false);
     }
@@ -218,17 +394,24 @@ const ScannerScreen = ({ navigation, route }) => {
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Toast.show({ type: 'error', text1: 'Permission Denied', text2: 'Please grant gallery permissions.' });
+      Toast.show({
+        type: 'error',
+        text1: 'Permission Denied',
+        text2: 'Please grant gallery permissions.',
+      });
       return;
     }
-    const result = await ImagePicker.launchImageLibraryAsync({ mediaTypes: ['images'], allowsEditing: true, quality: 0.9 });
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      quality: 0.9,
+    });
     if (!result.canceled) {
       setImage(result.assets[0].uri);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     }
   };
 
-  // Remove Image function
   const removeImage = () => {
     setImage(null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -242,7 +425,7 @@ const ScannerScreen = ({ navigation, route }) => {
 
   const scanLineTranslate = scanLineAnim.interpolate({
     inputRange: [0, 1],
-    outputRange: [-140, 140], 
+    outputRange: [-140, 140],
   });
 
   if (!permission) {
@@ -261,21 +444,50 @@ const ScannerScreen = ({ navigation, route }) => {
     );
   }
 
+  const canAnalyze = !!image && !loading && (isApiReady || offlineReady);
+
+  // Button label logic
+  let analyzeLabel = 'Analyze Leaf';
+  if (loading) analyzeLabel = 'Analyzing...';
+  else if (!isApiReady && offlineReady) analyzeLabel = 'Analyze Offline';
+  else if (!isApiReady && !offlineReady) analyzeLabel = 'Loading...';
+
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
       {/* Top Bar */}
       <View style={styles.topBar}>
-        <TouchableOpacity style={styles.topControlBtn} onPress={() => navigation.goBack()} activeOpacity={0.7}>
+        <TouchableOpacity
+          style={styles.topControlBtn}
+          onPress={() => navigation.goBack()}
+          activeOpacity={0.7}
+        >
           <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
         </TouchableOpacity>
         <Text style={styles.topTitle}>Scan Disease</Text>
         <View style={{ width: 40 }} />
       </View>
 
-      {/* Main Content - Camera in Card */}
+      {/* Status Bar */}
+      {apiCheckDone && !isApiReady && (
+        <View style={styles.serverErrorBar}>
+          <Ionicons name="cloud-offline-outline" size={16} color="#FFFFFF" />
+          <Text style={styles.serverErrorText}>
+            Offline Mode {offlineReady ? '✅' : '(loading model...)'}
+          </Text>
+          <TouchableOpacity onPress={() => checkApiHealth(0)} style={styles.retryBtn}>
+            <Ionicons name="refresh" size={16} color="#FFFFFF" />
+          </TouchableOpacity>
+        </View>
+      )}
+      {isApiReady && (
+        <View style={styles.serverConnectedBar}>
+          <Ionicons name="checkmark-circle" size={16} color="#FFFFFF" />
+          <Text style={styles.serverConnectedText}>Server Connected ✅</Text>
+        </View>
+      )}
+
+      {/* Main Content */}
       <View style={styles.mainContent}>
-        
-        {/* Camera / Image Card */}
         <View style={styles.cameraCard}>
           {image ? (
             <Image source={{ uri: image }} style={styles.previewImage} resizeMode="cover" />
@@ -288,31 +500,26 @@ const ScannerScreen = ({ navigation, route }) => {
             />
           )}
 
-          {/* Remove Button (Only appears when image is selected) */}
           {image && !loading && (
-            <TouchableOpacity
-              style={styles.removeButton}
-              onPress={removeImage}
-              activeOpacity={0.7}
-            >
+            <TouchableOpacity style={styles.removeButton} onPress={removeImage} activeOpacity={0.7}>
               <Ionicons name="close" size={20} color="#FFFFFF" />
             </TouchableOpacity>
           )}
 
-          {/* Scan Frame */}
           <View style={styles.scanFrameContainer}>
             <View style={styles.scanFrame}>
               <View style={styles.cornerTL} />
               <View style={styles.cornerTR} />
               <View style={styles.cornerBL} />
               <View style={styles.cornerBR} />
-              <Animated.View style={[styles.scanLine, { transform: [{ translateY: scanLineTranslate }] }]} />
+              <Animated.View
+                style={[styles.scanLine, { transform: [{ translateY: scanLineTranslate }] }]}
+              />
               <Animated.View style={[styles.pulseRing, { transform: [{ scale: pulseAnim }] }]} />
             </View>
           </View>
         </View>
 
-        {/* Loading State */}
         {loading && (
           <View style={styles.statusContainer}>
             <View style={styles.statusHeader}>
@@ -322,33 +529,42 @@ const ScannerScreen = ({ navigation, route }) => {
           </View>
         )}
 
-        {/* Controls */}
         <View style={styles.controlsContainer}>
           <TouchableOpacity style={styles.galleryButton} onPress={pickImage} activeOpacity={0.7}>
             <Ionicons name="images-outline" size={26} color="#FFFFFF" />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.shutterButton} onPress={takePhoto} activeOpacity={0.8} disabled={loading}>
+          <TouchableOpacity
+            style={styles.shutterButton}
+            onPress={takePhoto}
+            activeOpacity={0.8}
+            disabled={loading}
+          >
             <View style={styles.shutterInner} />
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.flashButton} onPress={() => setFlashEnabled(!flashEnabled)} activeOpacity={0.7}>
-            <Ionicons name={flashEnabled ? "flash" : "flash-outline"} size={26} color="#FFFFFF" />
+          <TouchableOpacity
+            style={styles.flashButton}
+            onPress={() => setFlashEnabled(!flashEnabled)}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name={flashEnabled ? 'flash' : 'flash-outline'}
+              size={26}
+              color="#FFFFFF"
+            />
           </TouchableOpacity>
         </View>
 
-        {/* Analyze Button */}
         {image && !loading && (
           <TouchableOpacity
-            style={[styles.analyzeButton, !isApiReady && styles.analyzeButtonDisabled]}
+            style={[styles.analyzeButton, !canAnalyze && styles.analyzeButtonDisabled]}
             onPress={analyzeImage}
             activeOpacity={0.85}
-            disabled={!isApiReady}
+            disabled={!canAnalyze}
           >
             <Ionicons name="scan-outline" size={20} color="#FFFFFF" />
-            <Text style={styles.analyzeButtonText}>
-              {isApiReady ? 'Analyze Leaf' : 'Waiting for Server...'}
-            </Text>
+            <Text style={styles.analyzeButtonText}>{analyzeLabel}</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -357,10 +573,7 @@ const ScannerScreen = ({ navigation, route }) => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#0A0A0A', 
-  },
+  container: { flex: 1, backgroundColor: '#0A0A0A' },
   permissionContainer: {
     flex: 1,
     backgroundColor: '#0A0A0A',
@@ -380,12 +593,8 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
     borderRadius: 8,
   },
-  permissionButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 16,
-  },
-  
+  permissionButtonText: { color: '#FFFFFF', fontWeight: '600', fontSize: 16 },
+
   topBar: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -395,27 +604,47 @@ const styles = StyleSheet.create({
     backgroundColor: '#0A0A0A',
     zIndex: 10,
   },
-  topControlBtn: {
-    width: 40,
-    height: 40,
-    justifyContent: 'center',
+  topControlBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
+  topTitle: { fontSize: 18, fontWeight: '600', color: '#FFFFFF' },
+
+  serverErrorBar: {
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 0, 0, 0.85)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    gap: 8,
+    marginHorizontal: 20,
+    borderRadius: 8,
+    marginTop: 4,
   },
-  topTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#FFFFFF',
+  serverConnectedBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(46, 125, 50, 0.95)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    gap: 8,
+    marginHorizontal: 20,
+    borderRadius: 8,
+    marginTop: 4,
   },
-  
+  serverErrorText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
+  serverConnectedText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
+  retryBtn: { padding: 4 },
+
   mainContent: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
+    paddingHorizontal: 20,
   },
-  
+
   cameraCard: {
     width: width - 40,
-    height: height * 0.55, 
+    height: height * 0.55,
     borderRadius: 24,
     overflow: 'hidden',
     backgroundColor: '#000',
@@ -428,16 +657,9 @@ const styles = StyleSheet.create({
     elevation: 8,
     position: 'relative',
   },
-  camera: {
-    width: '100%',
-    height: '100%',
-  },
-  previewImage: {
-    width: '100%',
-    height: '100%',
-  },
-  
-  // Remove Button Style
+  camera: { width: '100%', height: '100%' },
+  previewImage: { width: '100%', height: '100%' },
+
   removeButton: {
     position: 'absolute',
     top: 12,
@@ -452,7 +674,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     zIndex: 20,
   },
-  
+
   scanFrameContainer: {
     position: 'absolute',
     top: 0,
@@ -463,7 +685,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   scanFrame: {
-    width: 220, 
+    width: 220,
     height: 220,
     borderRadius: 16,
     borderWidth: 2,
@@ -538,17 +760,9 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(136, 217, 130, 0.1)',
     borderRadius: 16,
   },
-  
-  statusContainer: {
-    position: 'absolute',
-    top: '50%',
-    marginTop: 20,
-  },
-  statusHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
+
+  statusContainer: { position: 'absolute', top: '50%', marginTop: 20 },
+  statusHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   statusLabel: {
     fontSize: 14,
     fontWeight: '600',
@@ -556,7 +770,7 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     textTransform: 'uppercase',
   },
-  
+
   controlsContainer: {
     flexDirection: 'row',
     justifyContent: 'space-evenly',
@@ -590,13 +804,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     padding: 4,
   },
-  shutterInner: {
-    width: '100%',
-    height: '100%',
-    borderRadius: 35,
-    backgroundColor: '#FFFFFF',
-  },
-  
+  shutterInner: { width: '100%', height: '100%', borderRadius: 35, backgroundColor: '#FFFFFF' },
+
   analyzeButton: {
     marginTop: 20,
     width: '100%',
@@ -609,15 +818,8 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 10,
   },
-  analyzeButtonDisabled: {
-    backgroundColor: '#666666',
-    opacity: 0.7,
-  },
-  analyzeButtonText: {
-    color: '#FFFFFF',
-    fontWeight: '700',
-    fontSize: 16,
-  },
+  analyzeButtonDisabled: { backgroundColor: '#666666', opacity: 0.7 },
+  analyzeButtonText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
 });
 
 export default ScannerScreen;

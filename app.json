@@ -31,7 +31,8 @@
       "expo-camera",
       "expo-file-system",
       "expo-secure-store",
-      "react-native-fast-tflite"
+      "react-native-fast-tflite",
+      "expo-asset"
     ],
     "extra": {
       "supabaseUrl": "https://uevzwcidvqkcwickytuf.supabase.co",
