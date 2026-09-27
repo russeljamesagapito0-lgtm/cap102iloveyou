@@ -3,8 +3,9 @@ import { NitroModules } from 'react-native-nitro-modules';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
-import jpeg from 'jpeg-js';
 import { Buffer } from 'buffer';
+import { Skia, ColorType, AlphaType } from '@shopify/react-native-skia';
+
 
 // ===== CONFIG — mirrors backend/app.py =====
 const IMAGE_SIZE = 224;
@@ -20,8 +21,15 @@ const WEIGHTS = {
   quality: 0.5,
 };
 const MAX_SCORE = WEIGHTS.green + WEIGHTS.confidence + WEIGHTS.entropy + WEIGHTS.edges + WEIGHTS.quality; // 8.0
-const OVERALL_SCORE_THRESHOLD = 0.60;
-const MIN_CONFIDENCE_HARD_REJECT = 0.30;
+
+// These MUST match backend/app.py's edge_score / quality_score multipliers
+// (~line 209-210). Python only gives partial credit for these two checks —
+// if you tune one side, tune both, or the online/offline gates will diverge again.
+const EDGE_PARTIAL_CREDIT = 0.5;
+const QUALITY_PARTIAL_CREDIT = 0.3;
+
+const OVERALL_SCORE_THRESHOLD = 0.60; // must match app.py's `overall_score >= 0.60`
+const MIN_CONFIDENCE_HARD_REJECT = 0.3;
 
 const CLASS_KEYS = ['CBB', 'CBSD', 'CGM', 'CMD', 'HEALTHY'];
 const CLASS_NAMES = [
@@ -94,10 +102,26 @@ export const loadOfflineModel = async () => {
   return _loading;
 };
 
-// ===== Decode JPEG base64 → {width, height, data: RGBA Uint8Array} =====
-const decodeJpegBase64 = (base64) => {
-  const binary = Buffer.from(base64, 'base64');
-  return jpeg.decode(binary, { useTArray: true, formatAsRGBA: true });
+const decodeImageNative = async (uri) => {
+  const data = await Skia.Data.fromURI(uri);   // reads the file bytes
+  const image = Skia.Image.MakeImageFromEncoded(data);
+  if (!image) throw new Error('Skia failed to decode image');
+
+  const width = image.width();
+  const height = image.height();
+
+  const pixels = image.readPixels(0, 0, {
+    width,
+    height,
+    colorType: ColorType.RGBA_8888,
+    alphaType: AlphaType.Unpremul,
+  });
+
+  image.dispose();
+  data.dispose();
+
+  if (!pixels) throw new Error('Skia readPixels returned null');
+  return { data: pixels, width, height }; // Uint8Array RGBA — same shape jpeg-js gave you
 };
 
 // ===== Build Float32 tensor: (pixel/127.5) - 1.0, RGB =====
@@ -136,29 +160,38 @@ const computeEntropy = (probs) => {
   return H / Math.log(probs.length);
 };
 
-// Sobel-based edge density.
-// NOTE: app.py currently uses PIL's ImageFilter.FIND_EDGES, a different
-// kernel from this Sobel implementation. They will not produce identical
-// edge_density values on the same image. Pick one algorithm and use it in
-// both files if you need this metric to be directly comparable.
+// Ports backend/app.py's check_edge_density() exactly:
+//   gray = image.convert('L')                       -> luma grayscale (ITU-R 601-2)
+//   edges = gray.filter(ImageFilter.FIND_EDGES)      -> kernel [-1,-1,-1, -1,8,-1, -1,-1,-1]
+//   edge_density = sum(edge_array > 30) / total_px
+// PIL leaves the outer 1px border unfiltered (raw grayscale value, not run
+// through the kernel) — that border is still included in the >30 count, so
+// it's replicated here rather than cropped out.
 const computeEdgeDensity = (rgba, w, h) => {
-  let edges = 0;
-  const rowBytes = w * 4;
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      const i = (y * w + x) * 4;
-      const gx =
-        -rgba[i - 4] + rgba[i + 4] +
-        -2 * rgba[i - 4 - rowBytes] + 2 * rgba[i + 4 - rowBytes] +
-        -rgba[i - 4 + rowBytes] + rgba[i + 4 + rowBytes];
-      const gy =
-        -rgba[i - rowBytes] + rgba[i + rowBytes] +
-        -2 * rgba[i - 4 - rowBytes] + 2 * rgba[i - 4 + rowBytes] +
-        -rgba[i + 4 - rowBytes] + rgba[i + 4 + rowBytes];
-      if (Math.sqrt(gx * gx + gy * gy) > 30) edges++;
+  const gray = new Float32Array(w * h);
+  for (let p = 0; p < w * h; p++) {
+    const i = p * 4;
+    gray[p] = Math.round(rgba[i] * 0.299 + rgba[i + 1] * 0.587 + rgba[i + 2] * 0.114);
+  }
+
+  let count = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const p = y * w + x;
+      let v;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) {
+        v = gray[p]; // border: unfiltered, matches PIL
+      } else {
+        v =
+          -gray[p - w - 1] - gray[p - w] - gray[p - w + 1] +
+          -gray[p - 1] + 8 * gray[p] - gray[p + 1] +
+          -gray[p + w - 1] - gray[p + w] - gray[p + w + 1];
+        v = Math.min(255, Math.max(0, v));
+      }
+      if (v > 30) count++;
     }
   }
-  return edges / (w * h);
+  return count / (w * h);
 };
 
 // Brightness/contrast — matched to app.py's CURRENT (not "correct") definition:
@@ -199,8 +232,7 @@ export const runOfflineInference = async (imageUri) => {
     throw new Error('ImageManipulator did not return base64 data');
   }
 
-  // 2. Decode the ALREADY-224x224 JPEG → RGBA (no separate manual resize step)
-  const { data: rgba, width, height } = decodeJpegBase64(base64);
+  const { data: rgba, width, height } = await decodeImageNative(manipulated.uri);
 
   if (width !== IMAGE_SIZE || height !== IMAGE_SIZE) {
     console.warn(`⚠️ Manipulated image is ${width}x${height}, expected ${IMAGE_SIZE}x${IMAGE_SIZE}`);
@@ -248,8 +280,8 @@ export const runOfflineInference = async (imageUri) => {
     (isGreen ? WEIGHTS.green : 0) +
     (isConfidentPred ? WEIGHTS.confidence : 0) +
     (isCertain ? WEIGHTS.entropy : 0) +
-    (hasEdges ? WEIGHTS.edges : 0) +
-    (hasGoodQuality ? WEIGHTS.quality : 0);
+    (hasEdges ? EDGE_PARTIAL_CREDIT * WEIGHTS.edges : 0) +
+    (hasGoodQuality ? QUALITY_PARTIAL_CREDIT * WEIGHTS.quality : 0);
   const overallScore = totalScore / MAX_SCORE;
 
   let isCassava = overallScore >= OVERALL_SCORE_THRESHOLD;
