@@ -1,0 +1,91 @@
+/* src/styles/colors.css — Design tokens mirroring mobile ThemeContext */
+
+:root {
+  /* ===== LIGHT THEME (default) ===== */
+  --surface: #FFF8F6;
+  --surface-container: #FFE9E3;
+  --surface-container-low: #FFF1ED;
+  --surface-container-high: #FFE2DA;
+  --on-surface: #2C160E;
+  --on-surface-variant: #40493D;
+  --outline: #707A6C;
+  --outline-variant: #BFCABA;
+
+  --primary: #0D631B;
+  --on-primary: #FFFFFF;
+  --primary-container: #2E7D32;
+  --on-primary-container: #CBFFC2;
+
+  --secondary: #7A5649;
+  --on-secondary: #FFFFFF;
+  --secondary-container: #FDCDBC;
+
+  --tertiary: #774C00;
+  --tertiary-container: #986200;
+
+  --error: #BA1A1A;
+  --on-error: #FFFFFF;
+  --error-container: #FFDAD6;
+  --on-error-container: #93000A;
+
+  /* App-level aliases (match mobile ThemeContext names) */
+  --background: #FFF8F6;
+  --card: #FFFFFF;
+  --text: #2C160E;
+  --textSecondary: #40493D;
+  --border: #BFCABA;
+  --accent: #0D631B;
+
+  /* Admin-only status colors */
+  --success-bg: #DFF5DD;
+  --success-text: #0D631B;
+  --warning-bg: #FFE8C7;
+  --warning-text: #774C00;
+  --info-bg: #DDE8FF;
+  --info-text: #1B4EA0;
+}
+
+[data-theme="dark"] {
+  /* ===== DARK THEME ===== */
+  --surface: #1A1A1A;
+  --surface-container: #2C2C2C;
+  --surface-container-low: #242424;
+  --surface-container-high: #383838;
+  --on-surface: #FFFFFF;
+  --on-surface-variant: #B0B0B0;
+  --outline: #888888;
+  --outline-variant: #444444;
+
+  --primary: #88D982;
+  --on-primary: #00390A;
+  --primary-container: #0D631B;
+  --on-primary-container: #CBFFC2;
+
+  --secondary: #E0BBAA;
+  --on-secondary: #442A20;
+  --secondary-container: #5D4037;
+
+  --tertiary: #FFB74D;
+  --tertiary-container: #5D4037;
+
+  --error: #FFB4AB;
+  --on-error: #690005;
+  --error-container: #93000A;
+  --on-error-container: #FFDAD6;
+
+  /* App-level aliases */
+  --background: #121212;
+  --card: #1E1E1E;
+  --text: #FFFFFF;
+  --textSecondary: #B0B0B0;
+  --border: #444444;
+  --accent: #88D982;
+
+  /* Status colors (dark variants) */
+  --success-bg: #1E3D20;
+  --success-text: #88D982;
+  --warning-bg: #4A3818;
+  --warning-text: #FFB74D;
+  --info-bg: #1F2D4A;
+  --info-text: #90B4FF;
+}
