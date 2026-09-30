@@ -213,14 +213,14 @@ def is_cassava_leaf_comprehensive(image, probabilities):
     max_possible = 3.0 + 2.0 + 1.5 + 1.0 + 0.5
     overall_score = total_score / max_possible
     
-    logger.info(f"   📈 Overall score: {overall_score:.2%}")
-    logger.info(f"   ✅ Green: {is_green}, Confident: {is_confident_prediction}, Certain: {is_confident}, Edges: {has_edges}, Quality: {has_good_quality}")
+    logger.info(f"    Overall score: {overall_score:.2%}")
+    logger.info(f"    Green: {is_green}, Confident: {is_confident_prediction}, Certain: {is_confident}, Edges: {has_edges}, Quality: {has_good_quality}")
     
     is_cassava = overall_score >= 0.60
     
     # Additional check: Very low confidence should reject
     if max_confidence < 0.30:
-        logger.warning(f"   ⚠️ Very low confidence ({max_confidence:.2%}) - rejecting")
+        logger.warning(f"    Very low confidence ({max_confidence:.2%}) - rejecting")
         is_cassava = False
     
     # Convert all values to Python native types for JSON serialization
@@ -257,7 +257,7 @@ def preprocess_image(image_data):
 
         return image_array, original_image
     except Exception as e:
-        logger.error(f"❌ Image preprocessing error: {str(e)}")
+        logger.error(f" Image preprocessing error: {str(e)}")
         raise e
 
 # ===== PREDICT ENDPOINT =====
@@ -269,34 +269,34 @@ def predict():
     
     try:
         logger.info("=" * 60)
-        logger.info("📸 New prediction request received")
-        logger.info(f"📱 Client: {request.remote_addr}")
-        logger.info(f"📊 Content-Type: {request.headers.get('Content-Type')}")
+        logger.info(" New prediction request received")
+        logger.info(f" Client: {request.remote_addr}")
+        logger.info(f" Content-Type: {request.headers.get('Content-Type')}")
         
         # Parse JSON
         data = request.get_json()
         if not data:
-            logger.error("❌ No JSON data received")
+            logger.error(" No JSON data received")
             return jsonify({'error': 'No JSON data provided'}), 400
         
         if 'image' not in data:
-            logger.error("❌ No image in request")
+            logger.error(" No image in request")
             return jsonify({'error': 'No image provided'}), 400
         
         # Log image size
         image_length = len(data['image'])
-        logger.info(f"📷 Image data length: {image_length} characters")
+        logger.info(f" Image data length: {image_length} characters")
         
         if image_length < 100:
-            logger.warning("⚠️ Image data seems too small")
+            logger.warning(" Image data seems too small")
             return jsonify({'error': 'Invalid image data'}), 400
         
         # Preprocess image
-        logger.info("🔄 Preprocessing image...")
+        logger.info(" Preprocessing image...")
         image_tensor, original_image = preprocess_image(data['image'])
         
         # Run inference
-        logger.info("🧠 Running model inference...")
+        logger.info(" Running model inference...")
         interpreter.set_tensor(input_details[0]['index'], image_tensor)
         interpreter.invoke()
         output = interpreter.get_tensor(output_details[0]['index'])
@@ -305,8 +305,8 @@ def predict():
         predicted_index = np.argmax(probabilities)
         confidence = float(probabilities[predicted_index])
         
-        logger.info(f"📊 Raw probabilities: {probabilities}")
-        logger.info(f"🎯 Predicted index: {predicted_index}, Confidence: {confidence:.2%}")
+        logger.info(f" Raw probabilities: {probabilities}")
+        logger.info(f" Predicted index: {predicted_index}, Confidence: {confidence:.2%}")
         
         # Comprehensive cassava leaf detection
         is_cassava, detection_metrics = is_cassava_leaf_comprehensive(original_image, probabilities)
@@ -318,8 +318,8 @@ def predict():
         
         # If not a cassava leaf, return error
         if not is_cassava:
-            logger.warning("❌ Not a cassava leaf detected!")
-            logger.info(f"📊 Detection metrics: {detection_metrics}")
+            logger.warning(" Not a cassava leaf detected!")
+            logger.info(f" Detection metrics: {detection_metrics}")
             return jsonify({
                 'success': False,
                 'error': 'not_cassava',
@@ -334,9 +334,9 @@ def predict():
         class_name = CLASS_NAMES[predicted_index]
         disease_info = DISEASE_INFO[class_key]
         
-        logger.info(f"✅ Cassava leaf confirmed!")
-        logger.info(f"🌿 Prediction: {class_name} ({confidence:.2%})")
-        logger.info(f"📊 Detection metrics: {detection_metrics}")
+        logger.info(f" Cassava leaf confirmed!")
+        logger.info(f" Prediction: {class_name} ({confidence:.2%})")
+        logger.info(f" Detection metrics: {detection_metrics}")
         
         response_data = {
             'success': True,
@@ -352,16 +352,16 @@ def predict():
             'allProbabilities': all_probabilities
         }
         
-        logger.info("✅ Response prepared successfully")
+        logger.info(" Response prepared successfully")
         logger.info("=" * 60)
         
         return jsonify(response_data)
         
     except base64.binascii.Error as e:
-        logger.error(f"❌ Base64 decoding error: {str(e)}")
+        logger.error(f" Base64 decoding error: {str(e)}")
         return jsonify({'error': 'Invalid image encoding'}), 400
     except Exception as e:
-        logger.error(f"❌ Error: {str(e)}")
+        logger.error(f" Error: {str(e)}")
         import traceback
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
@@ -372,7 +372,7 @@ def health():
     if request.method == 'OPTIONS':
         return jsonify({'status': 'ok'}), 200
     
-    logger.info("💚 Health check requested")
+    logger.info(" Health check requested")
     return jsonify({
         'status': 'healthy',
         'message': 'Model is ready!',
@@ -400,24 +400,24 @@ def root():
 # ===== RUN SERVER =====
 if __name__ == '__main__':
     print("\n" + "=" * 60)
-    print("🚀 ROOTCARE AI SERVER STARTING")
+    print(" ROOTCARE AI SERVER STARTING")
     print("=" * 60)
-    print(f"📁 Model: ResNet50V2 (224x224)")
-    print(f"🎯 Confidence threshold: {CONFIDENCE_THRESHOLD:.0%}")
-    print(f"🌿 Green threshold: {GREEN_RATIO_THRESHOLD:.0%}")
-    print(f"📊 Entropy threshold: {ENTROPY_THRESHOLD:.0%}")
-    print("🔍 Detection: Color + Uncertainty + Edge + Quality")
+    print(f" Model: ResNet50V2 (224x224)")
+    print(f" Confidence threshold: {CONFIDENCE_THRESHOLD:.0%}")
+    print(f" Green threshold: {GREEN_RATIO_THRESHOLD:.0%}")
+    print(f" Entropy threshold: {ENTROPY_THRESHOLD:.0%}")
+    print(" Detection: Color + Uncertainty + Edge + Quality")
     print("=" * 60)
-    print("🌐 Server will be available at:")
+    print(" Server will be available at:")
     print(f"   http://localhost:5000")
     print(f"   http://0.0.0.0:5000")
     print("=" * 60)
-    print("📋 Available endpoints:")
+    print(" Available endpoints:")
     print("   GET  /        - Server info")
     print("   GET  /health  - Health check")
     print("   POST /predict - Predict disease")
     print("=" * 60)
-    print("ℹ️  Press Ctrl+C to stop the server")
+    print("ℹ  Press Ctrl+C to stop the server")
     print("=" * 60 + "\n")
     
     app.run(
