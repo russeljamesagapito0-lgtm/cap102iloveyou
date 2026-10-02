@@ -4,7 +4,6 @@ import { useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const lightColors = {
-  // ===== MATERIAL DESIGN TOKENS =====
   surface: '#FFF8F6',
   'surface-dim': '#FBD1C4',
   'surface-container': '#FFE9E3',

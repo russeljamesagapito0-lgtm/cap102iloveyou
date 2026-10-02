@@ -1,7 +1,7 @@
 // src/screens/HomeScreen.js
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
- View,
+  View,
   Text,
   StyleSheet,
   TouchableOpacity,
@@ -32,7 +32,6 @@ const MONTHS = [
 const weatherImage = require('../assets/weather.png');
 const backgroundImage = require('../assets/screen.png');
 const alertsImage = require('../assets/alerts.png');
-const logoImage = require('../assets/logo.png');
 
 const fertilizerTips = [
   { id: '1', title: 'Apply NPK 15-15-15', description: 'Broadcast evenly around the base of each plant, 5cm away from the stem.', timing: 'Best in early morning or late afternoon' },
@@ -62,6 +61,15 @@ const timeAgo = (dateString) => {
   if (hr < 24) return `${hr} hour${hr > 1 ? 's' : ''} ago`;
   if (day < 7) return `${day} day${day > 1 ? 's' : ''} ago`;
   return new Date(dateString).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+};
+
+// Time-based greeting
+const getGreeting = () => {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Good morning';
+  if (hour < 18) return 'Good afternoon';
+  if (hour < 22) return 'Good evening';
+  return 'Good night';
 };
 
 // ============ WEATHER HELPERS ============
@@ -383,7 +391,7 @@ const HomeScreen = ({ navigation }) => {
   const [weatherModalVisible, setWeatherModalVisible] = useState(false);
   const [notificationsModalVisible, setNotificationsModalVisible] = useState(false);
 
-  const [displayName, setDisplayName] = useState('RootCare');
+  const [displayName, setDisplayName] = useState('Farmer');
   const [avatarUrl, setAvatarUrl] = useState(null);
   const [profileLoading, setProfileLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -534,7 +542,7 @@ const HomeScreen = ({ navigation }) => {
       const { data: { session }, error: sessionError } = await supabase.auth.getSession();
 
       if (sessionError || !session) {
-        setDisplayName('RootCare');
+        setDisplayName('Farmer');
         setAvatarUrl(null);
         setProfileLoading(false);
         return;
@@ -546,7 +554,7 @@ const HomeScreen = ({ navigation }) => {
         if (!userError.message.includes('Auth session missing')) {
           console.error('Error fetching user:', userError.message);
         }
-        setDisplayName('RootCare');
+        setDisplayName('Farmer');
         setAvatarUrl(null);
         setProfileLoading(false);
         return;
@@ -560,25 +568,25 @@ const HomeScreen = ({ navigation }) => {
           .single();
 
         if (profileError) {
-          setDisplayName('RootCare');
+          setDisplayName('Farmer');
           setAvatarUrl(null);
         } else if (profile) {
           const name =
             profile.display_name ||
             `${profile.first_name || ''} ${profile.last_name || ''}`.trim() ||
-            'RootCare';
+            'Farmer';
           setDisplayName(name);
           setAvatarUrl(profile.avatar_url || null);
         } else {
-          setDisplayName('RootCare');
+          setDisplayName('Farmer');
           setAvatarUrl(null);
         }
       } else {
-        setDisplayName('RootCare');
+        setDisplayName('Farmer');
         setAvatarUrl(null);
       }
     } catch (error) {
-      setDisplayName('RootCare');
+      setDisplayName('Farmer');
       setAvatarUrl(null);
     } finally {
       setProfileLoading(false);
@@ -649,7 +657,7 @@ const HomeScreen = ({ navigation }) => {
   const hasActivity = !!lastScan || savedScans.length > 0;
   const scanTime = (row) => row?.captured_at || row?.created_at;
 
-  const avatarSource = avatarUrl ? { uri: avatarUrl } : logoImage;
+  const greeting = getGreeting();
 
   return (
     <SafeAreaView
@@ -676,8 +684,28 @@ const HomeScreen = ({ navigation }) => {
               }}
               activeOpacity={0.8}
             >
-              <View style={[styles.avatarContainer, { backgroundColor: themeColors.primaryFixed || themeColors.primary }]}>
-                <Image source={avatarSource} style={styles.avatar} resizeMode="cover" />
+              <View
+                style={[
+                  styles.avatarContainer,
+                  {
+                    backgroundColor: avatarUrl
+                      ? (themeColors.primaryFixed || themeColors.primary)
+                      : themeColors.surface,
+                    borderWidth: 1,
+                    borderColor: themeColors.border,
+                  },
+                ]}
+              >
+                {avatarUrl ? (
+                  <Image source={{ uri: avatarUrl }} style={styles.avatar} resizeMode="cover" />
+                ) : (
+                  <Ionicons
+                    name="person"
+                    size={20}
+                    color={themeColors.textSecondary}
+                    style={{ alignSelf: 'center', marginTop: 7 }}
+                  />
+                )}
               </View>
             </TouchableOpacity>
             <View style={styles.headerTextContainer}>
@@ -723,7 +751,7 @@ const HomeScreen = ({ navigation }) => {
         <View style={styles.greetingSection}>
           <View style={styles.greetingTextBlock}>
             <Text style={[styles.greetingTitle, { color: themeColors.text }]}>
-              Good morning, {profileLoading ? 'Farmer' : displayName.split(' ')[0]}!
+              {greeting}, {profileLoading ? 'Farmer' : displayName.split(' ')[0]}!
             </Text>
             <Text style={[styles.greetingSubtitle, { color: themeColors.textSecondary }]}>
               Your crops are thriving today.
@@ -905,7 +933,7 @@ const styles = StyleSheet.create({
   header: { width: '100%', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1 },
   headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-  avatarContainer: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden' },
+  avatarContainer: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden', justifyContent: 'center', alignItems: 'center' },
   avatar: { width: '100%', height: '100%' },
   headerTextContainer: { flexDirection: 'column' },
   greetingText: { fontSize: 10, fontWeight: '500' },

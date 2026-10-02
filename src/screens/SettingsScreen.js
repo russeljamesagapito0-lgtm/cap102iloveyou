@@ -21,6 +21,7 @@ import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { File } from 'expo-file-system';
 import { decode as base64Decode } from 'base64-arraybuffer';
+import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../utils/supabaseClient';
 import { useTheme } from '../context/ThemeContext';
 import { pushNotification } from '../utils/notifications';
@@ -32,6 +33,10 @@ const SettingsScreen = ({ navigation }) => {
   const [weatherAlerts, setWeatherAlerts] = useState(true);
   const [exitConfirmVisible, setExitConfirmVisible] = useState(false);
   const [activeModal, setActiveModal] = useState(null);
+
+  // Guest / auth state
+  const [isGuest, setIsGuest] = useState(true);
+  const [guestGateVisible, setGuestGateVisible] = useState(false);
 
   // Profile
   const [firstName, setFirstName] = useState('');
@@ -59,6 +64,16 @@ const SettingsScreen = ({ navigation }) => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
+  // ---------- AUTH / GUEST DETECTION ----------
+  const checkAuth = useCallback(async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      setIsGuest(!session?.user?.id);
+    } catch {
+      setIsGuest(true);
+    }
+  }, []);
+
   // ---------- LOAD PROFILE ----------
   const loadProfile = useCallback(async () => {
     try {
@@ -66,10 +81,12 @@ const SettingsScreen = ({ navigation }) => {
       const { data: { session } } = await supabase.auth.getSession();
 
       if (!session?.user?.id) {
+        setIsGuest(true);
         setLoadingProfile(false);
         return;
       }
 
+      setIsGuest(false);
       setEmail(session.user.email || '');
 
       const { data, error } = await supabase
@@ -96,8 +113,44 @@ const SettingsScreen = ({ navigation }) => {
   }, []);
 
   useEffect(() => {
+    checkAuth();
     loadProfile();
-  }, [loadProfile]);
+  }, [checkAuth, loadProfile]);
+
+  // Re-check auth when returning from Login/Register
+  useFocusEffect(
+    useCallback(() => {
+      checkAuth();
+    }, [checkAuth])
+  );
+
+  // ---------- GUEST GATE HELPERS ----------
+  // Only these three modals require an account.
+  // Help, Terms, and Privacy stay open to guests.
+  const GUEST_LOCKED_MODALS = ['profile', 'password', 'security'];
+
+  const openModal = (name) => {
+    if (GUEST_LOCKED_MODALS.includes(name) && isGuest) {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      setGuestGateVisible(true);
+      return;
+    }
+    setActiveModal(name);
+  };
+
+  const handleGuestSignIn = () => {
+    setGuestGateVisible(false);
+    navigation.navigate('Login');
+  };
+
+  const handleGuestRegister = () => {
+    setGuestGateVisible(false);
+    navigation.navigate('Register');
+  };
+
+  const handleGuestMaybeLater = () => {
+    setGuestGateVisible(false);
+  };
 
   // ---------- AVATAR UPLOAD ----------
   const uploadAvatar = async (uri, userId) => {
@@ -108,7 +161,6 @@ const SettingsScreen = ({ navigation }) => {
       const mime = ext === 'png' ? 'image/png' : 'image/jpeg';
       const path = `${userId}/avatar.${ext}`;
 
-      // Expo SDK 54 API
       const file = new File(uri);
       const base64 = await file.base64();
 
@@ -175,7 +227,6 @@ const SettingsScreen = ({ navigation }) => {
 
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-    // 🔔 Log the update
     await pushNotification({
       type: 'avatar_updated',
       title: 'Profile photo updated',
@@ -221,7 +272,6 @@ const SettingsScreen = ({ navigation }) => {
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      // 🔔 Log the update
       await pushNotification({
         type: 'profile_updated',
         title: 'Profile updated',
@@ -286,7 +336,6 @@ const SettingsScreen = ({ navigation }) => {
       setActiveModal(null);
       showSuccess('Password Updated', 'Use your new password next time you sign in.');
 
-      // 🔔 Log the update
       await pushNotification({
         type: 'password_changed',
         title: 'Password changed',
@@ -312,15 +361,15 @@ const SettingsScreen = ({ navigation }) => {
 
   const handlePushToggle = (value) => {
     setPushNotifications(value);
-    persistToggle('push_notifications', value);
+    if (!isGuest) persistToggle('push_notifications', value);
   };
 
   const handleWeatherToggle = (value) => {
     setWeatherAlerts(value);
-    persistToggle('weather_alerts', value);
+    if (!isGuest) persistToggle('weather_alerts', value);
   };
 
-  // ---------- LOGOUT ----------
+  // ---------- SIGN OUT ----------
   const handleExit = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setExitConfirmVisible(true);
@@ -347,6 +396,75 @@ const SettingsScreen = ({ navigation }) => {
       });
     }
   };
+
+  // Guest exit — leaves the app / returns to onboarding without signOut
+  const handleGuestExit = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'Onboarding' }],
+    });
+  };
+
+  // ---------- GUEST GATE MODAL ----------
+  const renderGuestGateModal = () => (
+    <Modal
+      visible={guestGateVisible}
+      transparent
+      animationType="fade"
+      onRequestClose={handleGuestMaybeLater}
+    >
+      <View style={styles.modalOverlayConfirm}>
+        <View style={[styles.confirmModalCard, { backgroundColor: themeColors.surface }]}>
+          <View style={[styles.guestIconCircle, { backgroundColor: themeColors.primary + '20' }]}>
+            <Ionicons name="lock-closed" size={30} color={themeColors.primary} />
+          </View>
+
+          <Text style={[styles.confirmModalTitle, { color: themeColors.text }]}>
+            Sign In Required
+          </Text>
+          <Text style={[styles.confirmModalBody, { color: themeColors.textSecondary }]}>
+            You need a RootCare account to edit your profile, change your password, or manage security settings.
+          </Text>
+
+          <TouchableOpacity
+            style={[styles.exitConfirmButton, { backgroundColor: themeColors.primary, marginBottom: 10 }]}
+            onPress={handleGuestSignIn}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="log-in-outline" size={18} color={themeColors['on-primary']} style={{ marginRight: 6 }} />
+            <Text style={[styles.exitConfirmButtonText, { color: themeColors['on-primary'] }]}>
+              Sign In
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.exitConfirmButton,
+              { backgroundColor: 'transparent', borderWidth: 1.5, borderColor: themeColors.primary, marginBottom: 10 },
+            ]}
+            onPress={handleGuestRegister}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="person-add-outline" size={18} color={themeColors.primary} style={{ marginRight: 6 }} />
+            <Text style={[styles.exitConfirmButtonText, { color: themeColors.primary }]}>
+              Create Account
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.confirmCancelButton}
+            onPress={handleGuestMaybeLater}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.confirmCancelText, { color: themeColors.textSecondary }]}>
+              Maybe Later
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
 
   // ---------- FEEDBACK MODAL ----------
   const renderFeedbackModal = () => (
@@ -717,12 +835,17 @@ const SettingsScreen = ({ navigation }) => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scrollContent, { paddingBottom: 40 }]}
       >
+        {/* Profile card — guest gated */}
         <TouchableOpacity
           style={[styles.profileSection, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}
-          onPress={() => setActiveModal('profile')}
+          onPress={() => openModal('profile')}
           activeOpacity={0.7}
         >
-          {profileImage ? (
+          {isGuest ? (
+            <View style={[styles.profileAvatar, { backgroundColor: themeColors.surface }]}>
+              <Ionicons name="person" size={30} color={themeColors.textSecondary} />
+            </View>
+          ) : profileImage ? (
             <Image source={{ uri: profileImage }} style={styles.profileAvatar} />
           ) : (
             <View style={[styles.profileAvatar, { backgroundColor: themeColors.primary }]}>
@@ -733,10 +856,14 @@ const SettingsScreen = ({ navigation }) => {
           )}
           <View style={styles.profileInfo}>
             <Text style={[styles.profileName, { color: themeColors.text }]} numberOfLines={1}>
-              {loadingProfile ? 'Loading…' : `${firstName} ${surname}`.trim() || 'RootCare User'}
+              {isGuest
+                ? 'Guest User'
+                : loadingProfile
+                  ? 'Loading…'
+                  : `${firstName} ${surname}`.trim() || 'RootCare User'}
             </Text>
             <Text style={[styles.profileEmail, { color: themeColors.textSecondary }]} numberOfLines={1}>
-              {email || '—'}
+              {isGuest ? 'Sign in to access your profile' : (email || '—')}
             </Text>
           </View>
           <Ionicons name="chevron-forward" size={20} color={themeColors.textSecondary} />
@@ -745,7 +872,7 @@ const SettingsScreen = ({ navigation }) => {
         <View style={[styles.section, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
           <Text style={[styles.sectionTitle, { color: themeColors.primary }]}>Account</Text>
 
-          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => setActiveModal('profile')}>
+          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => openModal('profile')}>
             <View style={styles.menuItemLeft}>
               <Ionicons name="person-outline" size={20} color={themeColors.secondary} />
               <Text style={[styles.menuItemText, { color: themeColors.text }]}>Edit Profile</Text>
@@ -755,7 +882,7 @@ const SettingsScreen = ({ navigation }) => {
 
           <View style={[styles.divider, { backgroundColor: themeColors.border }]} />
 
-          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => setActiveModal('password')}>
+          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => openModal('password')}>
             <View style={styles.menuItemLeft}>
               <Ionicons name="lock-closed-outline" size={20} color={themeColors.secondary} />
               <Text style={[styles.menuItemText, { color: themeColors.text }]}>Change Password</Text>
@@ -765,7 +892,7 @@ const SettingsScreen = ({ navigation }) => {
 
           <View style={[styles.divider, { backgroundColor: themeColors.border }]} />
 
-          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => setActiveModal('security')}>
+          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => openModal('security')}>
             <View style={styles.menuItemLeft}>
               <Ionicons name="shield-checkmark-outline" size={20} color={themeColors.secondary} />
               <Text style={[styles.menuItemText, { color: themeColors.text }]}>Security & Privacy</Text>
@@ -828,7 +955,7 @@ const SettingsScreen = ({ navigation }) => {
         <View style={[styles.section, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
           <Text style={[styles.sectionTitle, { color: themeColors.primary }]}>Support & Info</Text>
 
-          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => setActiveModal('help')}>
+          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => openModal('help')}>
             <View style={styles.menuItemLeft}>
               <Ionicons name="help-buoy-outline" size={20} color={themeColors.secondary} />
               <Text style={[styles.menuItemText, { color: themeColors.text }]}>Help Center</Text>
@@ -838,7 +965,7 @@ const SettingsScreen = ({ navigation }) => {
 
           <View style={[styles.divider, { backgroundColor: themeColors.border }]} />
 
-          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => setActiveModal('terms')}>
+          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => openModal('terms')}>
             <View style={styles.menuItemLeft}>
               <Ionicons name="document-text-outline" size={20} color={themeColors.secondary} />
               <Text style={[styles.menuItemText, { color: themeColors.text }]}>Terms of Service</Text>
@@ -848,7 +975,7 @@ const SettingsScreen = ({ navigation }) => {
 
           <View style={[styles.divider, { backgroundColor: themeColors.border }]} />
 
-          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => setActiveModal('privacy')}>
+          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => openModal('privacy')}>
             <View style={styles.menuItemLeft}>
               <Ionicons name="shield-outline" size={20} color={themeColors.secondary} />
               <Text style={[styles.menuItemText, { color: themeColors.text }]}>Privacy Policy</Text>
@@ -857,14 +984,26 @@ const SettingsScreen = ({ navigation }) => {
           </TouchableOpacity>
         </View>
 
-        <TouchableOpacity
-          style={[styles.exitButton, { borderColor: themeColors.error }]}
-          onPress={handleExit}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="log-out-outline" size={22} color={themeColors.error} />
-          <Text style={[styles.exitText, { color: themeColors.error }]}>Log Out</Text>
-        </TouchableOpacity>
+        {/* Bottom button — Exit for guests, Sign Out for signed-in */}
+        {isGuest ? (
+          <TouchableOpacity
+            style={[styles.exitButton, { borderColor: themeColors.border }]}
+            onPress={handleGuestExit}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="log-out-outline" size={22} color={themeColors.textSecondary} />
+            <Text style={[styles.exitText, { color: themeColors.textSecondary }]}>Exit</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={[styles.exitButton, { borderColor: themeColors.error }]}
+            onPress={handleExit}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="log-out-outline" size={22} color={themeColors.error} />
+            <Text style={[styles.exitText, { color: themeColors.error }]}>Sign Out</Text>
+          </TouchableOpacity>
+        )}
 
         <Text style={[styles.versionText, { color: themeColors.textSecondary }]}>
           RootCare Version 2.4.1 (Stable)
@@ -883,9 +1022,9 @@ const SettingsScreen = ({ navigation }) => {
               <Ionicons name="log-out-outline" size={30} color={themeColors.error} />
             </View>
 
-            <Text style={[styles.confirmModalTitle, { color: themeColors.text }]}>Logout App</Text>
+            <Text style={[styles.confirmModalTitle, { color: themeColors.text }]}>Sign Out</Text>
             <Text style={[styles.confirmModalBody, { color: themeColors.textSecondary }]}>
-              Are you sure you want to logout of RootCare?
+              Are you sure you want to sign out of RootCare?
             </Text>
 
             <TouchableOpacity
@@ -894,7 +1033,7 @@ const SettingsScreen = ({ navigation }) => {
               activeOpacity={0.85}
             >
               <Text style={[styles.exitConfirmButtonText, { color: themeColors['on-error'] }]}>
-                Logout RootCare
+                Sign Out
               </Text>
             </TouchableOpacity>
 
@@ -911,6 +1050,7 @@ const SettingsScreen = ({ navigation }) => {
 
       {renderModal()}
       {renderFeedbackModal()}
+      {renderGuestGateModal()}
     </SafeAreaView>
   );
 };
@@ -945,6 +1085,7 @@ const styles = StyleSheet.create({
   modalOverlay: { flex: 1, backgroundColor: 'rgba(44, 22, 14, 0.5)', justifyContent: 'flex-end', alignItems: 'center' },
   confirmModalCard: { width: '100%', maxWidth: 340, borderRadius: 24, padding: 32, alignItems: 'center', shadowColor: 'rgba(93, 64, 55, 0.15)', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 1, shadowRadius: 16, elevation: 12 },
   exitIconCircle: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  guestIconCircle: { width: 64, height: 64, borderRadius: 32, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
   confirmModalTitle: { fontSize: 20, fontWeight: '700', marginBottom: 4, textAlign: 'center' },
   confirmModalBody: { fontSize: 14, textAlign: 'center', marginBottom: 24, lineHeight: 20 },
   exitConfirmButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 999, width: '100%', minHeight: 48, paddingHorizontal: 12 },
