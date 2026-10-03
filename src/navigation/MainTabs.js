@@ -1,4 +1,3 @@
-// src/navigation/MainTabs.js
 import React from 'react';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { createStackNavigator } from '@react-navigation/stack';
@@ -15,7 +14,6 @@ const Stack = createStackNavigator();
 export default function MainTabs() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
-      {/* Inner tab navigator has a unique route name */}
       <Stack.Screen name="RootTabs" component={TabNavigator} />
     </Stack.Navigator>
   );

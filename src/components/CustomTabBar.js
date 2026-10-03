@@ -1,4 +1,3 @@
-// components/CustomTabBar.js
 import React from 'react';
 import { View, TouchableOpacity, Text, StyleSheet, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';

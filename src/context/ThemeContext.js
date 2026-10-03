@@ -1,4 +1,3 @@
-// context/ThemeContext.js
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import { useColorScheme } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -37,16 +36,14 @@ const lightColors = {
   'surface-variant': '#FFDBD0',
   'surface-tint': '#1B6D24',
 
-  // ===== APP-SPECIFIC ALIASES (FIX) =====
-  text: '#2C160E',            // white-on-dark in dark mode
-  textSecondary: '#40493D',   // muted text
-  border: '#BFCABA',          // divider color
-  card: '#FFFFFF',            // card surface
-  accent: '#0D631B',          // brand accent
+  text: '#2C160E',            
+  textSecondary: '#40493D',   
+  border: '#BFCABA',          
+  card: '#FFFFFF',            
+  accent: '#0D631B',         
 };
 
 const darkColors = {
-  // ===== MATERIAL DESIGN TOKENS =====
   surface: '#1A1A1A',
   'surface-dim': '#121212',
   'surface-container': '#2C2C2C',
@@ -80,7 +77,6 @@ const darkColors = {
   'surface-variant': '#444444',
   'surface-tint': '#88D982',
 
-  // ===== APP-SPECIFIC ALIASES (FIX) =====
   text: '#FFFFFF',            // ✅ NOW WHITE in dark mode
   textSecondary: '#B0B0B0',   // ✅ muted light grey
   border: '#444444',          // ✅ dark border

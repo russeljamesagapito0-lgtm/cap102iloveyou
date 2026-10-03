@@ -1,17 +1,5 @@
-﻿// screens/ScannerScreen.js
-import React, { useState, useRef, useEffect, useCallback } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  Image,
-  StyleSheet,
-  Platform,
-  Animated,
-  Alert,
-  ActivityIndicator,
-  Dimensions,
-} from 'react-native';
+﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {View,Text,TouchableOpacity,Image,StyleSheet,Platform,Animated,Alert,ActivityIndicator,Dimensions,}from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -22,14 +10,11 @@ import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
 import { useFocusEffect } from '@react-navigation/native';
 import NetInfo from '@react-native-community/netinfo';
-
 import { runOfflineInference, loadOfflineModel } from '../utils/offlineInference';
 import { enqueueMutation, generateScanId, flushQueue } from '../utils/syncManager';
 import { DISEASE_INFO } from '../constants/diseaseInfo';
 
 const { width, height } = Dimensions.get('window');
-
-// ===== API CONFIGURATION =====
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://172.167.134.221:5000';
 const API_URL = `${API_BASE_URL}/predict`;
 const HEALTH_URL = `${API_BASE_URL}/health`;
@@ -40,9 +25,9 @@ const DEBUG = process.env.EXPO_PUBLIC_DEBUG === 'true';
 const COMPUTER_IP = API_BASE_URL.replace('http://', '').replace(':5000', '');
 
 if (DEBUG) {
-  console.log('🔧 API Base URL:', API_BASE_URL);
-  console.log('🔗 API URL:', API_URL);
-  console.log('💚 Health URL:', HEALTH_URL);
+  console.log(' API Base URL:', API_BASE_URL);
+  console.log(' API URL:', API_URL);
+  console.log(' Health URL:', HEALTH_URL);
 }
 
 const fetchWithTimeout = (url, options = {}, timeout = TIMEOUT) => {
@@ -68,7 +53,6 @@ const ScannerScreen = ({ navigation, route }) => {
   const [flashEnabled, setFlashEnabled] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
 
-  // Offline state
   const [offlineReady, setOfflineReady] = useState(false);
   const [isOnline, setIsOnline] = useState(true);
 
@@ -78,28 +62,25 @@ const ScannerScreen = ({ navigation, route }) => {
   const scanLineAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(1)).current;
 
-  // ===== Init animations + health check + offline model preload =====
   useEffect(() => {
     startScanLineAnimation();
     startPulseAnimation();
     checkApiHealth();
 
-    // Preload offline model (non-blocking)
     loadOfflineModel()
       .then(() => setOfflineReady(true))
-      .catch((err) => console.warn('⚠️ Offline model unavailable:', err?.message));
+      .catch((err) => console.warn('Offline model unavailable:', err?.message));
 
-    // Connectivity listener — auto-flush when back online
     let wasConnected = true;
     const unsub = NetInfo.addEventListener((state) => {
       const connected = !!state.isConnected && state.isInternetReachable !== false;
       setIsOnline(connected);
 
       if (connected && !wasConnected) {
-        if (DEBUG) console.log('🌐 Back online — flushing sync queue');
+        if (DEBUG) console.log('Back online — flushing sync queue');
         flushQueue()
           .then((res) => {
-            if (res?.flushed > 0 && DEBUG) console.log('✅ Queue flushed:', res);
+            if (res?.flushed > 0 && DEBUG) console.log(' Queue flushed:', res);
           })
           .catch((e) => console.warn('Queue flush failed:', e));
       }
@@ -107,7 +88,6 @@ const ScannerScreen = ({ navigation, route }) => {
     });
 
     return () => unsub();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useFocusEffect(
@@ -131,12 +111,12 @@ const ScannerScreen = ({ navigation, route }) => {
   );
 
 const checkApiHealth = async (attempt = 0) => {
-  if (DEBUG) console.log('🔍 Checking API health (attempt ' + (attempt + 1) + '):', HEALTH_URL);
+  if (DEBUG) console.log(' Checking API health (attempt ' + (attempt + 1) + '):', HEALTH_URL);
   try {
-    const response = await fetchWithTimeout(HEALTH_URL, { method: 'GET' }, 5000); // 5s instead of 30s
+    const response = await fetchWithTimeout(HEALTH_URL, { method: 'GET' }, 5000);
     if (response.ok) {
       const data = await response.json();
-      if (DEBUG) console.log('✅ Server healthy:', data);
+      if (DEBUG) console.log(' Server healthy:', data);
       setIsApiReady(true);
       setApiCheckDone(true);
       setRetryCount(0);
@@ -144,7 +124,7 @@ const checkApiHealth = async (attempt = 0) => {
     }
     throw new Error('Server error');
   } catch (error) {
-    if (DEBUG) console.log('ℹ️ Server unreachable:', error?.message);
+    if (DEBUG) console.log(' Server unreachable:', error?.message);
 
     if (attempt < MAX_RETRIES) {
       setRetryCount(attempt + 1);
@@ -155,10 +135,9 @@ const checkApiHealth = async (attempt = 0) => {
     setIsApiReady(false);
     setApiCheckDone(true);
 
-    // Show info toast only ONCE, on final failure
     Toast.show({
       type: 'info',
-      text1: '📴 Offline Mode Active',
+      text1: 'Offline Mode Active',
       text2: 'Server unreachable. Offline scanning is ready.',
       visibilityTime: 3000,
     });
@@ -186,7 +165,6 @@ const checkApiHealth = async (attempt = 0) => {
     ).start();
   };
 
-  // ===== Image → base64 (for online request) =====
   const preprocessImage = async (imageUri) => {
     const manipulatedImage = await ImageManipulator.manipulateAsync(
       imageUri,
@@ -203,7 +181,6 @@ const checkApiHealth = async (attempt = 0) => {
     });
   };
 
-  // ===== Navigate to Result with unified payload =====
   const navigateToResult = (result, imageUri) => {
     navigation.navigate('Result', {
       imageUri,
@@ -222,7 +199,6 @@ const checkApiHealth = async (attempt = 0) => {
     });
   };
 
-  // ===== Queue offline scan for later sync =====
   const queueOfflineScan = async (imageUri, result) => {
     try {
       const base64Image = await FileSystem.readAsStringAsync(imageUri, {
@@ -242,13 +218,12 @@ const checkApiHealth = async (attempt = 0) => {
           inferredAt: new Date().toISOString(),
         },
       });
-      if (DEBUG) console.log('📥 Offline scan queued:', scanId);
+      if (DEBUG) console.log('Offline scan queued:', scanId);
     } catch (e) {
       console.warn('Failed to queue offline scan:', e);
     }
   };
 
-  // ===== MAIN: analyze (online → offline fallback) =====
   const analyzeImage = async () => {
     if (!image) {
       Toast.show({
@@ -262,11 +237,10 @@ const checkApiHealth = async (attempt = 0) => {
     setLoading(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    // ===== TRY ONLINE FIRST =====
     if (isApiReady && isOnline) {
       try {
         const base64Image = await preprocessImage(image);
-        if (DEBUG) console.log('📤 Sending request to:', API_URL);
+        if (DEBUG) console.log('Sending request to:', API_URL);
 
         const response = await fetchWithTimeout(API_URL, {
           method: 'POST',
@@ -274,7 +248,7 @@ const checkApiHealth = async (attempt = 0) => {
           body: JSON.stringify({ image: base64Image }),
         });
 
-        if (DEBUG) console.log('📥 Response status:', response.status);
+        if (DEBUG) console.log('Response status:', response.status);
 
         if (!response.ok) {
           let errMsg = 'Analysis failed';
@@ -286,7 +260,7 @@ const checkApiHealth = async (attempt = 0) => {
         }
 
         const result = await response.json();
-        if (DEBUG) console.log('✅ Analysis result:', result);
+        if (DEBUG) console.log('Analysis result:', result);
 
         if (result.success === false && result.error === 'not_cassava') {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -308,12 +282,10 @@ const checkApiHealth = async (attempt = 0) => {
 
         throw new Error(result.message || 'Invalid response from server');
       } catch (error) {
-        console.warn('⚠️ Online analysis failed, falling back to offline:', error?.message);
-        // fall through to offline
+        console.warn('Online analysis failed, falling back to offline:', error?.message);
       }
     }
 
-    // ===== OFFLINE FALLBACK =====
     if (!offlineReady) {
       setLoading(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -359,14 +331,14 @@ const checkApiHealth = async (attempt = 0) => {
 
       Toast.show({
         type: 'info',
-        text1: '📴 Offline Result',
+        text1: 'Offline Result',
         text2: 'Saved locally — will sync when online.',
         visibilityTime: 3000,
       });
 
       navigateToResult(enriched, image);
     } catch (error) {
-      console.error('❌ Offline inference failed:', error);
+      console.error('Offline inference failed:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       Toast.show({
         type: 'error',
@@ -446,7 +418,6 @@ const checkApiHealth = async (attempt = 0) => {
 
   const canAnalyze = !!image && !loading && (isApiReady || offlineReady);
 
-  // Button label logic
   let analyzeLabel = 'Analyze Leaf';
   if (loading) analyzeLabel = 'Analyzing...';
   else if (!isApiReady && offlineReady) analyzeLabel = 'Analyze Offline';
@@ -472,7 +443,7 @@ const checkApiHealth = async (attempt = 0) => {
         <View style={styles.serverErrorBar}>
           <Ionicons name="cloud-offline-outline" size={16} color="#FFFFFF" />
           <Text style={styles.serverErrorText}>
-            Offline Mode {offlineReady ? '✅' : '(loading model...)'}
+            Offline Mode {offlineReady ? '' : '(loading model...)'}
           </Text>
           <TouchableOpacity onPress={() => checkApiHealth(0)} style={styles.retryBtn}>
             <Ionicons name="refresh" size={16} color="#FFFFFF" />
@@ -482,11 +453,10 @@ const checkApiHealth = async (attempt = 0) => {
       {isApiReady && (
         <View style={styles.serverConnectedBar}>
           <Ionicons name="checkmark-circle" size={16} color="#FFFFFF" />
-          <Text style={styles.serverConnectedText}>Server Connected ✅</Text>
+          <Text style={styles.serverConnectedText}>Server Connected </Text>
         </View>
       )}
 
-      {/* Main Content */}
       <View style={styles.mainContent}>
         <View style={styles.cameraCard}>
           {image ? (

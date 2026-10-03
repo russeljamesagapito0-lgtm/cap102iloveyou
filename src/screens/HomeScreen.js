@@ -1,20 +1,6 @@
-// src/screens/HomeScreen.js
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Image,
-  ImageBackground,
-  Animated,
-  RefreshControl,
-  Platform,
-  Modal,
-  StatusBar,
-  ActivityIndicator,
-} from 'react-native';
+import { View,Text,StyleSheet,TouchableOpacity,ScrollView,Image,ImageBackground,Animated,RefreshControl,Platform,Modal,StatusBar,ActivityIndicator,}
+from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -46,7 +32,6 @@ const cropCareTips = [
   { id: '4', icon: 'cut-outline', title: 'Pruning', description: 'Remove dead or diseased leaves promptly.' },
 ];
 
-// ============ TIME HELPERS ============
 const timeAgo = (dateString) => {
   if (!dateString) return '';
   const then = new Date(dateString).getTime();
@@ -63,7 +48,6 @@ const timeAgo = (dateString) => {
   return new Date(dateString).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 };
 
-// Time-based greeting
 const getGreeting = () => {
   const hour = new Date().getHours();
   if (hour < 12) return 'Good morning';
@@ -72,7 +56,6 @@ const getGreeting = () => {
   return 'Good night';
 };
 
-// ============ WEATHER HELPERS ============
 const mapWeatherCode = (code) => {
   if (code === 0) return { label: 'Clear', icon: 'sunny', condition: 'Clear' };
   if (code === 1 || code === 2) return { label: 'Partly Cloudy', icon: 'partly-sunny', condition: 'Clouds' };
@@ -156,7 +139,6 @@ const buildAlertsFromForecast = (forecast) => {
   return alerts;
 };
 
-// ============ WEATHER ALERT MODAL ============
 const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => {
   const { themeColors } = useTheme();
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
@@ -384,7 +366,6 @@ const NotificationsModal = ({ visible, onClose, items, loading, onMarkAllRead })
   );
 };
 
-// ============ HOME SCREEN ============
 const HomeScreen = ({ navigation }) => {
   const { themeColors, isDarkMode } = useTheme();
   const scanScale = useRef(new Animated.Value(1)).current;
@@ -619,7 +600,6 @@ const HomeScreen = ({ navigation }) => {
     };
   }, [loadWeather, loadRecentActivity, loadNotifications]);
 
-  // Reload profile + activity + notifications whenever Home gains focus
   useFocusEffect(
     useCallback(() => {
       fetchUserProfile();

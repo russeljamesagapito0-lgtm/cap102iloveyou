@@ -1,4 +1,3 @@
-// utils/notifications.js
 import { supabase } from './supabaseClient';
 
 export async function pushNotification({ type, title, body, data = {} }) {

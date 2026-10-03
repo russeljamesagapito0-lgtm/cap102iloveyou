@@ -1,5 +1,4 @@
-﻿// src/data/onboardingData.js
-export const onboardingData = [
+﻿export const onboardingData = [
   {
     id: '1',
     title: 'RootCare',

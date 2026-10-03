@@ -1,4 +1,3 @@
-// screens/RegisterScreen.js
 import React, { useState, useCallback } from 'react';
 import {
   View,
@@ -77,7 +76,6 @@ We will notify you of any material changes.
 Privacy concerns: privacy@rootcare.com
 `;
 
-// ================= CALENDAR MODAL =================
 const CalendarModal = ({ visible, onClose, onSelectDate }) => {
   const { themeColors } = useTheme();
   const today = new Date();
@@ -206,7 +204,6 @@ const CalendarModal = ({ visible, onClose, onSelectDate }) => {
     </Modal>
   );
 };
-// ============================================================
 
 const CustomModal = ({ visible, onClose, title, message, type = 'success', onConfirm }) => {
   const { themeColors } = useTheme();
@@ -418,12 +415,12 @@ const RegisterScreen = ({ navigation }) => {
           zip_code: formData.zipCode || null, phone: formData.phone || null,
         };
         const { error: profileError } = await supabase.from('profiles').upsert(profileData);
-        if (profileError) console.error('❌ Profile creation error:', profileError.message);
+        if (profileError) console.error(' Profile creation error:', profileError.message);
       }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showModal('🎉 Registration Successful!', 'Your account has been created successfully. Please login to continue.', 'success', () => navigation.replace('Login'));
+      showModal(' Registration Successful!', 'Your account has been created successfully. Please login to continue.', 'success', () => navigation.replace('Login'));
     } catch (error) {
-      console.error('❌ Registration exception:', error);
+      console.error(' Registration exception:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       showModal('Error', 'An unexpected error occurred. Please try again.', 'error');
     } finally {

@@ -1,4 +1,3 @@
-// src/utils/offlineInference.js
 import { NitroModules } from 'react-native-nitro-modules';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -6,8 +5,6 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { Buffer } from 'buffer';
 import { Skia, ColorType, AlphaType } from '@shopify/react-native-skia';
 
-
-// ===== CONFIG — mirrors backend/app.py =====
 const IMAGE_SIZE = 224;
 const CONFIDENCE_THRESHOLD = 0.65;
 const GREEN_RATIO_THRESHOLD = 0.15;
@@ -20,11 +17,8 @@ const WEIGHTS = {
   edges: 1.0,
   quality: 0.5,
 };
-const MAX_SCORE = WEIGHTS.green + WEIGHTS.confidence + WEIGHTS.entropy + WEIGHTS.edges + WEIGHTS.quality; // 8.0
+const MAX_SCORE = WEIGHTS.green + WEIGHTS.confidence + WEIGHTS.entropy + WEIGHTS.edges + WEIGHTS.quality;
 
-// These MUST match backend/app.py's edge_score / quality_score multipliers
-// (~line 209-210). Python only gives partial credit for these two checks —
-// if you tune one side, tune both, or the online/offline gates will diverge again.
 const EDGE_PARTIAL_CREDIT = 0.5;
 const QUALITY_PARTIAL_CREDIT = 0.3;
 
@@ -46,7 +40,6 @@ const LOCAL_MODEL_PATH = FileSystem.documentDirectory + MODEL_FILENAME;
 let _model = null;
 let _loading = null;
 
-// ===== Load model once =====
 export const loadOfflineModel = async () => {
   if (_model) return _model;
   if (_loading) return _loading;
@@ -55,7 +48,7 @@ export const loadOfflineModel = async () => {
     try {
       const info = await FileSystem.getInfoAsync(LOCAL_MODEL_PATH);
       if (!info.exists) {
-        console.log('📥 Copying model to documentDirectory...');
+        console.log('Copying model to documentDirectory...');
         const asset = Asset.fromModule(
           require('../assets/rootcare_cassava_model_resnet50v2.tflite')
         );
@@ -69,12 +62,12 @@ export const loadOfflineModel = async () => {
           from: asset.localUri,
           to: LOCAL_MODEL_PATH,
         });
-        console.log('✅ Model copied to:', LOCAL_MODEL_PATH);
+        console.log('Model copied to:', LOCAL_MODEL_PATH);
       } else {
-        console.log('📦 Model already cached at:', LOCAL_MODEL_PATH);
+        console.log('Model already cached at:', LOCAL_MODEL_PATH);
       }
 
-      console.log('📦 Reading model bytes into JS...');
+      console.log('Reading model bytes into JS...');
       const base64 = await FileSystem.readAsStringAsync(LOCAL_MODEL_PATH, {
         encoding: FileSystem.EncodingType.Base64,
       });
@@ -90,10 +83,10 @@ export const loadOfflineModel = async () => {
       const model = tfliteModule.createModel(arrayBuffer, []);
 
       _model = model;
-      console.log('✅ Offline TFLite model loaded');
+      console.log('Offline TFLite model loaded');
       return model;
     } catch (e) {
-      console.error('❌ Failed to load TFLite model:', e?.message || String(e));
+      console.error('Failed to load TFLite model:', e?.message || String(e));
       _loading = null;
       throw e;
     }
@@ -103,7 +96,7 @@ export const loadOfflineModel = async () => {
 };
 
 const decodeImageNative = async (uri) => {
-  const data = await Skia.Data.fromURI(uri);   // reads the file bytes
+  const data = await Skia.Data.fromURI(uri);   
   const image = Skia.Image.MakeImageFromEncoded(data);
   if (!image) throw new Error('Skia failed to decode image');
 
@@ -121,10 +114,9 @@ const decodeImageNative = async (uri) => {
   data.dispose();
 
   if (!pixels) throw new Error('Skia readPixels returned null');
-  return { data: pixels, width, height }; // Uint8Array RGBA — same shape jpeg-js gave you
+  return { data: pixels, width, height }; 
 };
 
-// ===== Build Float32 tensor: (pixel/127.5) - 1.0, RGB =====
 const buildInputTensor = (rgba224) => {
   const out = new Float32Array(IMAGE_SIZE * IMAGE_SIZE * 3);
   for (let i = 0, j = 0; i < rgba224.length; i += 4, j += 3) {
@@ -135,10 +127,6 @@ const buildInputTensor = (rgba224) => {
   return out;
 };
 
-// ===== Detection helpers (mirror app.py) =====
-
-// Green ratio — computed on the SAME resized image the model sees, so it
-// reflects what actually got fed to the network (see note in analysis).
 const computeGreenRatio = (rgba) => {
   let green = 0;
   const total = rgba.length / 4;
@@ -149,7 +137,6 @@ const computeGreenRatio = (rgba) => {
   return green / total;
 };
 
-// Normalized Shannon entropy
 const computeEntropy = (probs) => {
   const eps = 1e-7;
   let H = 0;
@@ -160,13 +147,6 @@ const computeEntropy = (probs) => {
   return H / Math.log(probs.length);
 };
 
-// Ports backend/app.py's check_edge_density() exactly:
-//   gray = image.convert('L')                       -> luma grayscale (ITU-R 601-2)
-//   edges = gray.filter(ImageFilter.FIND_EDGES)      -> kernel [-1,-1,-1, -1,8,-1, -1,-1,-1]
-//   edge_density = sum(edge_array > 30) / total_px
-// PIL leaves the outer 1px border unfiltered (raw grayscale value, not run
-// through the kernel) — that border is still included in the >30 count, so
-// it's replicated here rather than cropped out.
 const computeEdgeDensity = (rgba, w, h) => {
   const gray = new Float32Array(w * h);
   for (let p = 0; p < w * h; p++) {
@@ -180,7 +160,7 @@ const computeEdgeDensity = (rgba, w, h) => {
       const p = y * w + x;
       let v;
       if (x === 0 || y === 0 || x === w - 1 || y === h - 1) {
-        v = gray[p]; // border: unfiltered, matches PIL
+        v = gray[p]; 
       } else {
         v =
           -gray[p - w - 1] - gray[p - w] - gray[p - w + 1] +
@@ -194,16 +174,11 @@ const computeEdgeDensity = (rgba, w, h) => {
   return count / (w * h);
 };
 
-// Brightness/contrast — matched to app.py's CURRENT (not "correct") definition:
-// mean/stddev of the RED channel only, not true luma. This is a bug in the
-// original Python code (ImageStat.Stat(image).mean[0] is just channel 0),
-// but matching it here is what gives you online/offline parity today.
-// If you fix app.py to use real luma, update this to match (0.299/0.587/0.114).
 const computeBrightnessContrast = (rgba, w, h) => {
   let sum = 0, sumSq = 0;
   const n = w * h;
   for (let i = 0; i < rgba.length; i += 4) {
-    const r = rgba[i]; // red channel only, matches current app.py behavior
+    const r = rgba[i]; 
     sum += r;
     sumSq += r * r;
   }
@@ -213,14 +188,9 @@ const computeBrightnessContrast = (rgba, w, h) => {
   return { brightness: mean, contrast: stddev };
 };
 
-// ===== Main pipeline =====
 export const runOfflineInference = async (imageUri) => {
   const model = await loadOfflineModel();
 
-  // 1. Resize + re-encode using the SAME call the online path uses before
-  //    upload, so both paths hand the model pixel-equivalent input instead
-  //    of two different resize algorithms operating on different source
-  //    resolutions.
   const manipulated = await ImageManipulator.manipulateAsync(
     imageUri,
     [{ resize: { width: IMAGE_SIZE, height: IMAGE_SIZE } }],
@@ -235,21 +205,15 @@ export const runOfflineInference = async (imageUri) => {
   const { data: rgba, width, height } = await decodeImageNative(manipulated.uri);
 
   if (width !== IMAGE_SIZE || height !== IMAGE_SIZE) {
-    console.warn(`⚠️ Manipulated image is ${width}x${height}, expected ${IMAGE_SIZE}x${IMAGE_SIZE}`);
+    console.warn(` Manipulated image is ${width}x${height}, expected ${IMAGE_SIZE}x${IMAGE_SIZE}`);
   }
 
-  // 3. Build input tensor directly from the resized image
   const input = buildInputTensor(rgba);
-
-  // 4. Build a REAL ArrayBuffer (Hermes' .buffer may be polyfilled)
   const inputArrayBuffer = new ArrayBuffer(input.length * 4);
   const inputView = new Float32Array(inputArrayBuffer);
   inputView.set(input);
-
-  // 5. Run inference
   const rawOutputs = await model.run([inputArrayBuffer]);
 
-  // 6. Normalize the output into a plain array of numbers
   let probs;
   if (rawOutputs[0] instanceof Float32Array) {
     probs = Array.from(rawOutputs[0]);
@@ -263,8 +227,6 @@ export const runOfflineInference = async (imageUri) => {
 
   const predictedIndex = probs.indexOf(Math.max(...probs));
   const confidence = probs[predictedIndex];
-
-  // 7. Detection gating — computed on the SAME 224x224 image the model saw
   const greenRatio = computeGreenRatio(rgba);
   const entropy = computeEntropy(probs);
   const edgeDensity = computeEdgeDensity(rgba, width, height);
@@ -304,8 +266,8 @@ export const runOfflineInference = async (imageUri) => {
     green_ratio: parseFloat((greenRatio * 100).toFixed(2)),
   };
 
-  console.log('🧠 Inference probs:', allProbabilities);
-  console.log('🧠 Detection metrics:', detectionMetrics);
+  console.log(' Inference probs:', allProbabilities);
+  console.log(' Detection metrics:', detectionMetrics);
 
   if (!isCassava || !Number.isFinite(confidence)) {
     return {

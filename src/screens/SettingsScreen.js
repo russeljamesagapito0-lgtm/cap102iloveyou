@@ -1,20 +1,5 @@
-// screens/SettingsScreen.js
 import React, { useState, useEffect, useCallback } from 'react';
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  Platform,
-  ScrollView,
-  Switch,
-  Modal,
-  TextInput,
-  KeyboardAvoidingView,
-  Image,
-  Alert,
-  ActivityIndicator,
-} from 'react-native';
+import {View,Text,StyleSheet,TouchableOpacity,Platform,ScrollView,Switch,Modal,TextInput,KeyboardAvoidingView,Image,Alert,ActivityIndicator,}from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -34,11 +19,9 @@ const SettingsScreen = ({ navigation }) => {
   const [exitConfirmVisible, setExitConfirmVisible] = useState(false);
   const [activeModal, setActiveModal] = useState(null);
 
-  // Guest / auth state
   const [isGuest, setIsGuest] = useState(true);
   const [guestGateVisible, setGuestGateVisible] = useState(false);
 
-  // Profile
   const [firstName, setFirstName] = useState('');
   const [middleName, setMiddleName] = useState('');
   const [surname, setSurname] = useState('');
@@ -50,7 +33,6 @@ const SettingsScreen = ({ navigation }) => {
   const [savingPassword, setSavingPassword] = useState(false);
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
 
-  // Feedback modal
   const [feedbackVisible, setFeedbackVisible] = useState(false);
   const [feedback, setFeedback] = useState({ type: 'success', title: '', body: '' });
 
@@ -59,12 +41,10 @@ const SettingsScreen = ({ navigation }) => {
     setFeedbackVisible(true);
   };
 
-  // Password
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  // ---------- AUTH / GUEST DETECTION ----------
   const checkAuth = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -74,7 +54,6 @@ const SettingsScreen = ({ navigation }) => {
     }
   }, []);
 
-  // ---------- LOAD PROFILE ----------
   const loadProfile = useCallback(async () => {
     try {
       setLoadingProfile(true);
@@ -117,16 +96,12 @@ const SettingsScreen = ({ navigation }) => {
     loadProfile();
   }, [checkAuth, loadProfile]);
 
-  // Re-check auth when returning from Login/Register
   useFocusEffect(
     useCallback(() => {
       checkAuth();
     }, [checkAuth])
   );
 
-  // ---------- GUEST GATE HELPERS ----------
-  // Only these three modals require an account.
-  // Help, Terms, and Privacy stay open to guests.
   const GUEST_LOCKED_MODALS = ['profile', 'password', 'security'];
 
   const openModal = (name) => {
@@ -234,7 +209,6 @@ const SettingsScreen = ({ navigation }) => {
     });
   };
 
-  // ---------- SAVE PROFILE ----------
   const saveProfile = async () => {
     if (savingProfile) return;
 
@@ -288,7 +262,6 @@ const SettingsScreen = ({ navigation }) => {
     }
   };
 
-  // ---------- CHANGE PASSWORD ----------
   const changePassword = async () => {
     if (!newPassword || !confirmPassword) {
       Alert.alert('Missing fields', 'Please fill in all password fields.');
@@ -348,7 +321,6 @@ const SettingsScreen = ({ navigation }) => {
     }
   };
 
-  // ---------- NOTIFICATION TOGGLES ----------
   const persistToggle = async (key, value) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.user?.id) return;
@@ -369,7 +341,6 @@ const SettingsScreen = ({ navigation }) => {
     if (!isGuest) persistToggle('weather_alerts', value);
   };
 
-  // ---------- SIGN OUT ----------
   const handleExit = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setExitConfirmVisible(true);
@@ -397,7 +368,6 @@ const SettingsScreen = ({ navigation }) => {
     }
   };
 
-  // Guest exit — leaves the app / returns to onboarding without signOut
   const handleGuestExit = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     navigation.reset({
@@ -406,7 +376,6 @@ const SettingsScreen = ({ navigation }) => {
     });
   };
 
-  // ---------- GUEST GATE MODAL ----------
   const renderGuestGateModal = () => (
     <Modal
       visible={guestGateVisible}
@@ -466,7 +435,6 @@ const SettingsScreen = ({ navigation }) => {
     </Modal>
   );
 
-  // ---------- FEEDBACK MODAL ----------
   const renderFeedbackModal = () => (
     <Modal visible={feedbackVisible} transparent animationType="fade" onRequestClose={() => setFeedbackVisible(false)}>
       <View style={styles.modalOverlayConfirm}>
@@ -494,7 +462,6 @@ const SettingsScreen = ({ navigation }) => {
     </Modal>
   );
 
-  // ---------- MAIN MODAL ----------
   const renderModal = () => {
     if (!activeModal) return null;
 

@@ -41,7 +41,6 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 4,
   },
-  // Primary button - Terracotta (matches header)
   primary: {
     backgroundColor: '#C77A58',
   },
@@ -50,7 +49,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.5,
   },
-  // Secondary button - Dark beige
   secondary: {
     backgroundColor: '#8A7A66',
   },
@@ -59,7 +57,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0.5,
   },
-  // Success button - Green
   success: {
     backgroundColor: '#4CAF50',
   },
@@ -68,7 +65,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.5,
   },
-  // Danger button - Red
   danger: {
     backgroundColor: '#c62828',
   },
@@ -77,7 +73,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     letterSpacing: 0.5,
   },
-  // Outline button - Terracotta border
   outline: {
     backgroundColor: 'transparent',
     borderWidth: 2,
@@ -88,7 +83,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0.5,
   },
-  // Ghost button - No background
   ghost: {
     backgroundColor: 'transparent',
     shadowOpacity: 0,
@@ -99,7 +93,6 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     letterSpacing: 0.5,
   },
-  // Onboarding button - Pill shape with accent color
   onboarding: {
     backgroundColor: '#B86D4F',
     paddingVertical: 16,

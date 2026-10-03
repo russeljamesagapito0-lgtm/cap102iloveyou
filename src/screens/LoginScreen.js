@@ -105,7 +105,7 @@ const LoginScreen = ({ navigation }) => {
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showModal('Welcome Back! 🎉', 'You have successfully logged in to RootCare.', 'success', () => navigation.replace('MainTabs'));
+      showModal('Welcome Back! ', 'You have successfully logged in to RootCare.', 'success', () => navigation.replace('MainTabs'));
     } catch (error) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
       showModal('Error', 'An unexpected error occurred. Please try again.', 'error');

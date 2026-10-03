@@ -1,5 +1,4 @@
-﻿// screens/OnboardingScreen.js
-import React, { useState, useRef, useEffect } from 'react';
+﻿import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet, FlatList, Dimensions,
   StatusBar, Image, Animated, SafeAreaView,

@@ -1,4 +1,3 @@
-# backend/app.py
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import tensorflow as tf
@@ -11,7 +10,6 @@ import math
 import logging
 from datetime import datetime
 
-# ===== LOGGING CONFIGURATION =====
 logging.basicConfig(
     level=logging.DEBUG,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -24,7 +22,6 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# ===== CORS CONFIGURATION - ALLOW ALL ORIGINS =====
 CORS(app, resources={
     r"/*": {
         "origins": "*",
@@ -35,7 +32,6 @@ CORS(app, resources={
     }
 })
 
-# ===== DISABLE CACHING =====
 @app.after_request
 def after_request(response):
     response.headers.add('Cache-Control', 'no-store, no-cache, must-revalidate, post-check=0, pre-check=0')
@@ -46,14 +42,12 @@ def after_request(response):
     response.headers.add('Access-Control-Allow-Methods', 'GET,POST,OPTIONS')
     return response
 
-# ===== MODEL CONFIGURATION =====
 MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'rootcare_cassava_model_resnet50v2.tflite')
 IMAGE_SIZE = 224
 
-# ===== CONFIDENCE & DETECTION SETTINGS =====
-CONFIDENCE_THRESHOLD = 0.65  # 65% minimum confidence
-GREEN_RATIO_THRESHOLD = 0.15  # At least 15% green pixels
-ENTROPY_THRESHOLD = 0.75  # Maximum uncertainty allowed
+CONFIDENCE_THRESHOLD = 0.65  
+GREEN_RATIO_THRESHOLD = 0.15 
+ENTROPY_THRESHOLD = 0.75  
 
 CLASS_NAMES = [
     'Cassava Bacterial Blight (CBB)',
@@ -65,7 +59,6 @@ CLASS_NAMES = [
 
 CLASS_KEYS = ['CBB', 'CBSD', 'CGM', 'CMD', 'HEALTHY']
 
-# Disease information
 DISEASE_INFO = {
     'CBB': {
         'name': 'Cassava Bacterial Blight',
@@ -109,7 +102,6 @@ DISEASE_INFO = {
     }
 }
 
-# ===== HELPER FUNCTION TO CONVERT NUMPY TYPES =====
 def convert_to_serializable(obj):
     """Convert NumPy types to Python native types for JSON serialization"""
     if isinstance(obj, np.integer):
@@ -127,8 +119,7 @@ def convert_to_serializable(obj):
     else:
         return obj
 
-# ===== LOAD THE MODEL =====
-logger.info("🔄 Loading TFLite model...")
+logger.info("Loading TFLite model...")
 try:
     interpreter = tf.lite.Interpreter(model_path=MODEL_PATH)
     interpreter.allocate_tensors()
@@ -136,14 +127,12 @@ try:
     input_details = interpreter.get_input_details()
     output_details = interpreter.get_output_details()
     
-    logger.info(f"✅ Model loaded successfully!")
-    logger.info(f"📥 Input shape: {input_details[0]['shape']}")
-    logger.info(f"📤 Output shape: {output_details[0]['shape']}")
+    logger.info(f"Model loaded successfully!")
+    logger.info(f"Input shape: {input_details[0]['shape']}")
+    logger.info(f"Output shape: {output_details[0]['shape']}")
 except Exception as e:
-    logger.error(f"❌ Failed to load model: {str(e)}")
+    logger.error(f"Failed to load model: {str(e)}")
     raise e
-
-# ===== DETECTION FUNCTIONS =====
 
 def is_cassava_leaf_color(image):
     """Check for green color presence"""
@@ -168,7 +157,7 @@ def calculate_entropy(probabilities):
     max_entropy = np.log(len(probs))
     normalized_entropy = entropy / max_entropy
     
-    logger.debug(f"   📊 Uncertainty: {normalized_entropy:.2%}")
+    logger.debug(f"   Uncertainty: {normalized_entropy:.2%}")
     return normalized_entropy
 
 def check_edge_density(image):
@@ -187,12 +176,12 @@ def check_brightness_contrast(image):
     brightness = stat.mean[0] / 255.0
     contrast = stat.stddev[0] / 255.0
     
-    logger.debug(f"   💡 Brightness: {brightness:.2%}, Contrast: {contrast:.2%}")
+    logger.debug(f"    Brightness: {brightness:.2%}, Contrast: {contrast:.2%}")
     return 0.10 < brightness < 0.95 and contrast > 0.05
 
 def is_cassava_leaf_comprehensive(image, probabilities):
     """Combined detection using multiple methods"""
-    logger.info("🔍 Running cassava leaf detection...")
+    logger.info(" Running cassava leaf detection...")
     
     is_green = is_cassava_leaf_color(image)
     entropy = calculate_entropy(probabilities)
@@ -202,7 +191,6 @@ def is_cassava_leaf_comprehensive(image, probabilities):
     max_confidence = np.max(probabilities)
     is_confident_prediction = max_confidence > CONFIDENCE_THRESHOLD
     
-    # Calculate overall score (weighted)
     green_score = 1.0 if is_green else 0.0
     confidence_score = 1.0 if is_confident_prediction else 0.0
     entropy_score = 1.0 if is_confident else 0.0
@@ -218,12 +206,10 @@ def is_cassava_leaf_comprehensive(image, probabilities):
     
     is_cassava = overall_score >= 0.60
     
-    # Additional check: Very low confidence should reject
     if max_confidence < 0.30:
         logger.warning(f"    Very low confidence ({max_confidence:.2%}) - rejecting")
         is_cassava = False
     
-    # Convert all values to Python native types for JSON serialization
     return is_cassava, {
         'is_green': bool(is_green),
         'is_confident': bool(is_confident_prediction),
@@ -236,7 +222,6 @@ def is_cassava_leaf_comprehensive(image, probabilities):
         'green_ratio': float(round(green_score * 100, 2))
     }
 
-# ===== PREPROCESS IMAGE =====
 def preprocess_image(image_data):
     """Convert base64 image to preprocessed tensor"""
     try:
@@ -260,7 +245,6 @@ def preprocess_image(image_data):
         logger.error(f" Image preprocessing error: {str(e)}")
         raise e
 
-# ===== PREDICT ENDPOINT =====
 @app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():
     # Handle preflight request
@@ -273,7 +257,6 @@ def predict():
         logger.info(f" Client: {request.remote_addr}")
         logger.info(f" Content-Type: {request.headers.get('Content-Type')}")
         
-        # Parse JSON
         data = request.get_json()
         if not data:
             logger.error(" No JSON data received")
@@ -283,7 +266,6 @@ def predict():
             logger.error(" No image in request")
             return jsonify({'error': 'No image provided'}), 400
         
-        # Log image size
         image_length = len(data['image'])
         logger.info(f" Image data length: {image_length} characters")
         
@@ -291,11 +273,9 @@ def predict():
             logger.warning(" Image data seems too small")
             return jsonify({'error': 'Invalid image data'}), 400
         
-        # Preprocess image
         logger.info(" Preprocessing image...")
         image_tensor, original_image = preprocess_image(data['image'])
         
-        # Run inference
         logger.info(" Running model inference...")
         interpreter.set_tensor(input_details[0]['index'], image_tensor)
         interpreter.invoke()
@@ -308,15 +288,12 @@ def predict():
         logger.info(f" Raw probabilities: {probabilities}")
         logger.info(f" Predicted index: {predicted_index}, Confidence: {confidence:.2%}")
         
-        # Comprehensive cassava leaf detection
         is_cassava, detection_metrics = is_cassava_leaf_comprehensive(original_image, probabilities)
         
-        # Convert probabilities to JSON serializable format
         all_probabilities = {}
         for i in range(len(CLASS_KEYS)):
             all_probabilities[CLASS_KEYS[i]] = float(round(probabilities[i] * 100, 2))
         
-        # If not a cassava leaf, return error
         if not is_cassava:
             logger.warning(" Not a cassava leaf detected!")
             logger.info(f" Detection metrics: {detection_metrics}")
@@ -329,7 +306,6 @@ def predict():
                 'allProbabilities': all_probabilities
             }), 200
         
-        # Get class info
         class_key = CLASS_KEYS[predicted_index]
         class_name = CLASS_NAMES[predicted_index]
         disease_info = DISEASE_INFO[class_key]
@@ -366,7 +342,6 @@ def predict():
         traceback.print_exc()
         return jsonify({'error': str(e)}), 500
 
-# ===== HEALTH CHECK =====
 @app.route('/health', methods=['GET', 'OPTIONS'])
 def health():
     if request.method == 'OPTIONS':
@@ -383,7 +358,6 @@ def health():
         'server': 'Flask + TensorFlow Lite'
     })
 
-# ===== ROOT ENDPOINT =====
 @app.route('/', methods=['GET'])
 def root():
     return jsonify({
@@ -397,7 +371,6 @@ def root():
         'status': 'running'
     })
 
-# ===== RUN SERVER =====
 if __name__ == '__main__':
     print("\n" + "=" * 60)
     print(" ROOTCARE AI SERVER STARTING")

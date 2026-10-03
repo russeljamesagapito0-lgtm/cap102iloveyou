@@ -47,7 +47,6 @@ const getAccuracyColor = (accuracy) => {
   return { backgroundColor: '#E74C3C' };
 };
 
-// Map a Supabase row -> the shape this UI expects
 const mapRowToItem = (row) => ({
   id: row.id,
   title: row.disease_name || row.crop_type || 'Untitled Scan',
@@ -135,7 +134,6 @@ const HistoryScreen = ({ navigation, route }) => {
     }, [loadScans])
   );
 
-  // ---------- HELPERS ----------
   const persist = async (id, patch) => {
     const { error } = await supabase.from('scans').update(patch).eq('id', id);
     if (error) {
@@ -156,7 +154,6 @@ const HistoryScreen = ({ navigation, route }) => {
     return true;
   };
 
-  // ---------- FILTER/SORT ----------
   const getFilteredData = () => {
     let filtered = historyData.filter(item => {
       if (activeTab === 'recent') return !item.isDeleted && !item.isArchived && !item.isSaved;
@@ -178,7 +175,6 @@ const HistoryScreen = ({ navigation, route }) => {
 
   const filteredData = getFilteredData();
 
-  // ---------- SELECT MODE ----------
   const enterSelectMode = () => setIsSelectMode(true);
   const exitSelectMode = () => { setIsSelectMode(false); setSelectedIds([]); };
 
@@ -199,7 +195,6 @@ const HistoryScreen = ({ navigation, route }) => {
     else setSelectedIds(filteredData.map(i => i.id));
   };
 
-  // ---------- SINGLE ACTIONS ----------
   const handleSave = async (id) => {
     if (isSelectMode) { toggleSelect(id); return; }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);

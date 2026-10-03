@@ -1,5 +1,4 @@
-﻿// App.js
-import { Buffer } from 'buffer';
+﻿import { Buffer } from 'buffer';
 global.Buffer = global.Buffer || Buffer;
 
 import React, { useState, useEffect } from 'react';
@@ -24,16 +23,11 @@ import { flushQueue } from './src/utils/syncManager';
 
 const Stack = createStackNavigator();
 
-// ============================================
-// INNER APP — lives inside ThemeProvider
-// so it can use useTheme() to theme navigation
-// ============================================
 const AppNavigator = () => {
   const { themeColors, isDarkMode, isLoading: themeLoading } = useTheme();
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
 
-  // ===== Auth session =====
   useEffect(() => {
     const checkSession = async () => {
       try {
@@ -64,14 +58,12 @@ const AppNavigator = () => {
     };
   }, []);
 
-  // ===== Preload offline TFLite model (non-blocking) =====
   useEffect(() => {
     loadOfflineModel()
-      .then(() => console.log('✅ Offline TFLite model ready'))
-      .catch((err) => console.warn('⚠️ Offline model not loaded:', err?.message));
+      .then(() => console.log('Offline TFLite model ready'))
+      .catch((err) => console.warn(' Offline model not loaded:', err?.message));
   }, []);
 
-  // ===== Auto-flush sync queue on reconnect =====
   useEffect(() => {
     let wasConnected = false;
 
@@ -79,10 +71,10 @@ const AppNavigator = () => {
       const connected = !!state.isConnected && state.isInternetReachable !== false;
 
       if (connected && !wasConnected) {
-        console.log('🌐 Back online — attempting queue flush');
+        console.log(' Back online — attempting queue flush');
         flushQueue()
           .then((res) => {
-            if (res?.flushed > 0) console.log('✅ Flushed queued scans:', res);
+            if (res?.flushed > 0) console.log(' Flushed queued scans:', res);
           })
           .catch((e) => console.warn('Queue flush failed:', e?.message));
       }
@@ -92,7 +84,6 @@ const AppNavigator = () => {
     return () => unsub();
   }, []);
 
-  // ===== Loading screen =====
   if (isLoading || themeLoading) {
     return (
       <View
@@ -108,7 +99,6 @@ const AppNavigator = () => {
     );
   }
 
-  // ===== Navigation theme (affects default screen bg, card bg, etc.) =====
   const navigationTheme = {
     ...(isDarkMode ? NavDarkTheme : NavDefaultTheme),
     colors: {
@@ -139,9 +129,6 @@ const AppNavigator = () => {
   );
 };
 
-// ============================================
-// ROOT APP — wraps everything in ThemeProvider
-// ============================================
 const App = () => {
   return (
     <ThemeProvider>

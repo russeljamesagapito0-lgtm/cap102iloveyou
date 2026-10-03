@@ -1,8 +1,5 @@
-﻿// screens/ResultScreen.js
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  View, Text, Image, StyleSheet, TouchableOpacity, ScrollView, Modal, Platform, Dimensions, BackHandler, StatusBar, Alert,
-} from 'react-native';
+﻿import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, Image, StyleSheet, TouchableOpacity, ScrollView, Modal, Platform, Dimensions, BackHandler, StatusBar, Alert,} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -72,7 +69,6 @@ const ResultScreen = ({ route, navigation }) => {
   const formattedDate = scannedAt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   const formattedTime = scannedAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
-  // ---- Persist to Supabase ----
   const saveResult = async () => {
     if (isSaving) return;
 
@@ -82,13 +78,11 @@ const ResultScreen = ({ route, navigation }) => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
 
-      // Guest mode — don't persist, just mark as saved locally
       if (!session?.user?.id) {
         setIsSaved(true);
         return;
       }
 
-      // Derive disease type from DISEASE_INFO or fallback
       const diseaseType = diseaseData.type || diseaseData.diseaseType || 'Unknown';
       const diseaseSeverity = diseaseData.severity || null;
       const diseaseAccuracy = typeof confidence === 'number'
@@ -103,7 +97,6 @@ const ResultScreen = ({ route, navigation }) => {
         is_saved: true,
         is_archived: false,
         is_deleted: false,
-        // New columns added by SQL above:
         disease_name: diseaseData.name,
         disease_type: diseaseType,
         severity: diseaseSeverity,
