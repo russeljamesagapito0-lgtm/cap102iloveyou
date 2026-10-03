@@ -8,6 +8,9 @@ export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
+  const [notice] = useState(() =>
+    sessionStorage.getItem('rc_expired') ? 'Your session expired. Please sign in again.' : ''
+  );
   const [busy, setBusy] = useState(false);
 
   if (!loading && isAdmin) return <Navigate to="/" replace />;
@@ -46,6 +49,7 @@ export default function Login() {
           {busy ? 'Signing in...' : 'Sign in'}
         </button>
 
+        {notice && !error && <p className="login-note">{notice}</p>}
         {error && <p className="login-note" style={{ color: 'var(--error)' }}>{error}</p>}
       </form>
     </div>

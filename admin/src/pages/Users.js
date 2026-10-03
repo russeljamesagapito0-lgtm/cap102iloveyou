@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import Badge from '../components/Badge';
 import Modal from '../components/Modal';
-import { supabase, fmtDate } from '../lib/supabase';
+import { supabase, fmtDate, logAudit } from '../lib/supabase';
 
 export default function Users() {
   const [users, setUsers] = useState([]);
@@ -42,6 +42,7 @@ export default function Users() {
     const status = selected.status === 'active' ? 'suspended' : 'active';
     const { error } = await supabase.from('profiles').update({ status }).eq('id', selected.id);
     if (error) return alert(error.message);
+    logAudit(status === 'suspended' ? 'suspend' : 'reactivate', 'user', selected.id, { email: selected.email });
     setUsers((prev) => prev.map((u) => (u.id === selected.id ? { ...u, status } : u)));
     setSelected(null);
   };

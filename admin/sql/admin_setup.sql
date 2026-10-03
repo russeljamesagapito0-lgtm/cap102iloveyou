@@ -49,6 +49,36 @@ create table if not exists public.feedback (
   replied_at timestamptz
 );
 
+-- Tables may already exist with fewer columns: add anything missing
+alter table public.profiles
+  add column if not exists email text,
+  add column if not exists full_name text,
+  add column if not exists region text,
+  add column if not exists plan text not null default 'free',
+  add column if not exists role text not null default 'user',
+  add column if not exists status text not null default 'active',
+  add column if not exists last_active_at timestamptz default now(),
+  add column if not exists created_at timestamptz default now();
+alter table public.diseases
+  add column if not exists type text, add column if not exists severity text,
+  add column if not exists symptoms text, add column if not exists treatment text,
+  add column if not exists prevention text,
+  add column if not exists published boolean not null default false,
+  add column if not exists updated_at timestamptz default now();
+alter table public.scans
+  add column if not exists user_id uuid references public.profiles(id) on delete set null,
+  add column if not exists disease_code text, add column if not exists confidence numeric,
+  add column if not exists image_url text, add column if not exists region text,
+  add column if not exists flagged boolean not null default false,
+  add column if not exists corrected boolean not null default false,
+  add column if not exists created_at timestamptz default now();
+alter table public.feedback
+  add column if not exists user_id uuid references public.profiles(id) on delete set null,
+  add column if not exists subject text, add column if not exists message text,
+  add column if not exists status text not null default 'open',
+  add column if not exists reply text, add column if not exists replied_at timestamptz,
+  add column if not exists created_at timestamptz default now();
+
 -- Auto-create profile on signup
 create or replace function public.handle_new_user() returns trigger
 language plpgsql security definer set search_path = public as $$

@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import Badge from '../components/Badge';
 import Modal from '../components/Modal';
-import { supabase, fmtDate } from '../lib/supabase';
+import { downloadCsv } from '../lib/csv';
+import { supabase, fmtDate, logAudit } from '../lib/supabase';
 
 export default function Scans() {
   const [scans, setScans] = useState([]);
@@ -21,6 +22,7 @@ export default function Scans() {
         (data || []).map((s) => ({
           id: s.id,
           code: s.disease_code,
+          predicted: s.predicted_code,
           disease: names[s.disease_code] || s.disease_code || 'Unknown',
           user: s.profiles?.full_name || s.profiles?.email || 'Unknown',
           confidence: Number(s.confidence ?? 0),
@@ -52,18 +54,46 @@ export default function Scans() {
     if (!selected) return;
     const { error } = await supabase
       .from('scans')
-      .update({ disease_code: newLabel, flagged: false, corrected: true })
+      .update({ predicted_code: selected.predicted || selected.code, disease_code: newLabel, flagged: false, corrected: true })
       .eq('id', selected.id);
     if (error) return alert(error.message);
+    logAudit('update', 'scan', selected.id, { from: selected.code, to: newLabel });
     const name = diseases.find((d) => d.code === newLabel)?.name || newLabel;
     setScans((prev) =>
       prev.map((s) =>
         s.id === selected.id
-          ? { ...s, code: newLabel, disease: name, flagged: false, corrected: true }
+          ? { ...s, predicted: s.predicted || s.code, code: newLabel, disease: name, flagged: false, corrected: true }
           : s
       )
     );
     setSelected(null);
+  };
+
+  const exportCsv = async (onlyCorrected) => {
+    let rows = [];
+    for (let from = 0; ; from += 1000) {
+      let q = supabase.from('scans').select('*, profiles(email)').order('created_at', { ascending: false }).range(from, from + 999);
+      if (onlyCorrected) q = q.eq('corrected', true);
+      const { data, error } = await q;
+      if (error) return alert(error.message);
+      rows = rows.concat(data);
+      if (data.length < 1000) break;
+    }
+    downloadCsv(
+      `scans${onlyCorrected ? '_corrected' : ''}_${new Date().toISOString().slice(0, 10)}.csv`,
+      rows.map((s) => ({
+        id: s.id,
+        created_at: s.created_at,
+        user_email: s.profiles?.email,
+        region: s.region,
+        predicted_label: s.predicted_code || s.disease_code,
+        final_label: s.disease_code,
+        confidence: s.confidence,
+        flagged: s.flagged,
+        corrected: s.corrected,
+        image_url: s.image_url
+      }))
+    );
   };
 
   const confidenceClass = (c) => {
@@ -92,6 +122,8 @@ export default function Scans() {
               {f === 'all' ? 'All' : f === 'flagged' ? 'Flagged' : 'Low confidence'}
             </button>
           ))}
+          <button className="filter-btn" onClick={() => exportCsv(false)}>Export CSV</button>
+          <button className="filter-btn" onClick={() => exportCsv(true)}>Export corrected</button>
         </div>
       </div>
 

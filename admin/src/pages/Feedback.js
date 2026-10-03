@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import Badge from '../components/Badge';
-import { supabase, fmtDate } from '../lib/supabase';
+import { supabase, fmtDate, logAudit } from '../lib/supabase';
 
 const statusColor = {
   open: 'yellow',
@@ -39,6 +39,7 @@ export default function Feedback() {
   const patchItem = async (patch) => {
     const { error } = await supabase.from('feedback').update(patch).eq('id', selectedId);
     if (error) return alert(error.message);
+    logAudit('update', 'feedback', selectedId, { status: patch.status, replied: !!patch.reply });
     setItems((prev) => prev.map((i) => (i.id === selectedId ? { ...i, ...patch } : i)));
   };
 
