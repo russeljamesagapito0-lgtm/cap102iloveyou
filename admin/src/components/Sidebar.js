@@ -29,7 +29,7 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className="sidebar-footer">v0.1 mock build</div>
+      <div className="sidebar-footer">v0.2</div>
     </aside>
   );
 }

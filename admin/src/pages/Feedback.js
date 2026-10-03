@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Badge from '../components/Badge';
-import { feedback as seed } from '../data/mockData';
+import { supabase, fmtDate } from '../lib/supabase';
 
 const statusColor = {
   open: 'yellow',
@@ -10,34 +10,45 @@ const statusColor = {
 };
 
 export default function Feedback() {
-  const [items, setItems] = useState(seed);
-  const [selectedId, setSelectedId] = useState(seed[0]?.id ?? null);
+  const [items, setItems] = useState([]);
+  const [selectedId, setSelectedId] = useState(null);
+
+  useEffect(() => {
+    supabase
+      .from('feedback')
+      .select('*, profiles(full_name,email)')
+      .order('created_at', { ascending: false })
+      .then(({ data }) => {
+        const list = (data || []).map((f) => ({
+          id: f.id,
+          user: f.profiles?.full_name || f.profiles?.email || 'Unknown',
+          subject: f.subject,
+          message: f.message,
+          status: f.status,
+          reply: f.reply,
+          date: fmtDate(f.created_at)
+        }));
+        setItems(list);
+        setSelectedId(list[0]?.id ?? null);
+      });
+  }, []);
   const [reply, setReply] = useState('');
 
   const selected = items.find((i) => i.id === selectedId);
 
-  const sendReply = () => {
+  const patchItem = async (patch) => {
+    const { error } = await supabase.from('feedback').update(patch).eq('id', selectedId);
+    if (error) return alert(error.message);
+    setItems((prev) => prev.map((i) => (i.id === selectedId ? { ...i, ...patch } : i)));
+  };
+
+  const sendReply = async () => {
     if (!reply.trim() || !selected) return;
-    setItems((prev) =>
-      prev.map((i) =>
-        i.id === selectedId
-          ? {
-              ...i,
-              reply,
-              status: 'resolved',
-              date: new Date().toISOString().slice(0, 16).replace('T', ' ')
-            }
-          : i
-      )
-    );
+    await patchItem({ reply, status: 'resolved', replied_at: new Date().toISOString() });
     setReply('');
   };
 
-  const setStatus = (status) => {
-    setItems((prev) =>
-      prev.map((i) => (i.id === selectedId ? { ...i, status } : i))
-    );
-  };
+  const setStatus = (status) => patchItem({ status });
 
   const openCount = items.filter((i) => i.status === 'open').length;
 

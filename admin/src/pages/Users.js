@@ -1,10 +1,31 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import Badge from '../components/Badge';
 import Modal from '../components/Modal';
-import { users as seed } from '../data/mockData';
+import { supabase, fmtDate } from '../lib/supabase';
 
 export default function Users() {
-  const [users, setUsers] = useState(seed);
+  const [users, setUsers] = useState([]);
+
+  useEffect(() => {
+    supabase
+      .from('profiles')
+      .select('*, scans(count)')
+      .order('created_at', { ascending: false })
+      .then(({ data }) =>
+        setUsers(
+          (data || []).map((p) => ({
+            id: p.id,
+            name: p.full_name || p.email || 'Unnamed',
+            email: p.email || '-',
+            plan: p.plan,
+            region: p.region || '-',
+            scans: p.scans?.[0]?.count ?? 0,
+            lastActive: fmtDate(p.last_active_at),
+            status: p.status
+          }))
+        )
+      );
+  }, []);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(null);
 
@@ -16,15 +37,12 @@ export default function Users() {
     );
   });
 
-  const toggleStatus = () => {
+  const toggleStatus = async () => {
     if (!selected) return;
-    setUsers((prev) =>
-      prev.map((u) =>
-        u.id === selected.id
-          ? { ...u, status: u.status === 'active' ? 'suspended' : 'active' }
-          : u
-      )
-    );
+    const status = selected.status === 'active' ? 'suspended' : 'active';
+    const { error } = await supabase.from('profiles').update({ status }).eq('id', selected.id);
+    if (error) return alert(error.message);
+    setUsers((prev) => prev.map((u) => (u.id === selected.id ? { ...u, status } : u)));
     setSelected(null);
   };
 
