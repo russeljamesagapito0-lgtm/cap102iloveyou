@@ -5,7 +5,8 @@ const links = [
   { to: '/users',    label: 'Users' },
   { to: '/scans',    label: 'Scans' },
   { to: '/diseases', label: 'Disease Info' },
-  { to: '/feedback', label: 'Feedback' }
+  { to: '/feedback', label: 'Feedback' },
+  { to: '/audit',    label: 'Audit Log' }
 ];
 
 export default function Sidebar() {
@@ -29,7 +30,7 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      <div className="sidebar-footer">v0.1 mock build</div>
+      <div className="sidebar-footer">v0.2</div>
     </aside>
   );
 }

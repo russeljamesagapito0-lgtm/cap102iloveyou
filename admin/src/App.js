@@ -6,6 +6,7 @@ import Users from './pages/Users';
 import Scans from './pages/Scans';
 import DiseaseContent from './pages/DiseaseContent';
 import Feedback from './pages/Feedback';
+import Audit from './pages/Audit';
 
 export default function App() {
   return (
@@ -17,6 +18,7 @@ export default function App() {
         <Route path="/scans"    element={<Scans />} />
         <Route path="/diseases" element={<DiseaseContent />} />
         <Route path="/feedback" element={<Feedback />} />
+        <Route path="/audit"    element={<Audit />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

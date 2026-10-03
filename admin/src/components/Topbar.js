@@ -1,11 +1,13 @@
 import { useTheme } from '../context/ThemeContext';
+import { useAuth } from '../context/AuthContext';
 
 export default function Topbar({ user }) {
   const { isDarkMode, toggleDarkMode } = useTheme();
+  const { signOut } = useAuth();
 
   const initials = user.name
     .split(' ')
-    .map((w) => w[0])
+    .map((w) => w[0]?.toUpperCase())
     .join('')
     .slice(0, 2);
 
@@ -24,6 +26,8 @@ export default function Topbar({ user }) {
         >
           {isDarkMode ? 'Light mode' : 'Dark mode'}
         </button>
+
+        <button className="theme-toggle" onClick={signOut}>Sign out</button>
 
         <div className="topbar-user-info">
           <p className="topbar-user-name">{user.name}</p>

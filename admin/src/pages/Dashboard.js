@@ -1,14 +1,28 @@
 import StatCard from '../components/StatCard';
-import {
-  stats,
-  scansPerDay,
-  diseaseBreakdown,
-  recentActivity
-} from '../data/mockData';
+import { useEffect, useState } from 'react';
+import { supabase, fmtDate } from '../lib/supabase';
 
-const maxCount = Math.max(...scansPerDay.map((d) => d.count));
+const COLORS = ['#ef4444', '#f97316', '#eab308', '#84cc16', '#06b6d4', '#22c55e', '#8b5cf6', '#ec4899'];
 
 export default function Dashboard() {
+  const [stats, setStats] = useState(null);
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    supabase.rpc('admin_dashboard').then(({ data, error }) => {
+      if (error) setErr(error.message);
+      else setStats(data);
+    });
+  }, []);
+
+  if (err) return <p className="text-muted">Error: {err}</p>;
+  if (!stats) return <p className="text-muted">Loading...</p>;
+
+  const scansPerDay = stats.scansPerDay;
+  const diseaseBreakdown = stats.diseaseBreakdown.map((d, i) => ({ ...d, color: COLORS[i % COLORS.length] }));
+  const recentActivity = stats.recent.map((r, i) => ({ id: i, text: r.text, time: fmtDate(r.created_at) }));
+  const maxCount = Math.max(1, ...scansPerDay.map((d) => d.count));
+
   return (
     <div className="stack-lg">
       <div className="page-header">

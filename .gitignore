@@ -4,4 +4,4 @@ node_modules
 *.log
 node_modules/
 .expo/
-dist/
+dist/*.zip
