@@ -4,16 +4,23 @@ import Topbar from './Topbar';
 import { useAuth } from '../context/AuthContext';
 
 export default function Layout() {
-  const { loading, isAdmin, profile } = useAuth();
-  if (loading) return <div className="content">Loading...</div>;
+  const { loading, isAdmin } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="content">
+        <p className="text-muted">Loading...</p>
+      </div>
+    );
+  }
+
   if (!isAdmin) return <Navigate to="/login" replace />;
 
-  const user = { name: profile.full_name || profile.email, email: profile.email };
   return (
     <div className="app-shell">
       <Sidebar />
       <div className="main-area">
-        <Topbar user={user} />
+        <Topbar />
         <main className="content">
           <Outlet />
         </main>

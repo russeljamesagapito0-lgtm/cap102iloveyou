@@ -3,7 +3,18 @@ import { supabase } from '../lib/supabase';
 
 const AuthContext = createContext();
 
-const SESSION_MS = 60 * 60 * 1000; // auto sign-out 1 hour after login
+const SESSION_MS = 60 * 60 * 1000;
+const EXPIRED_FLAG = 'rc_expired';
+const EXPIRY_CHECK_MS = 15000;
+
+const fetchProfile = async (userId) => {
+  const { data } = await supabase
+    .from('profiles')
+    .select('*')
+    .eq('id', userId)
+    .single();
+  return data;
+};
 
 export function AuthProvider({ children }) {
   const [session, setSession] = useState(null);
@@ -11,64 +22,69 @@ export function AuthProvider({ children }) {
   const [loading, setLoading] = useState(true);
   const [expiresAt, setExpiresAt] = useState(null);
 
-  const loadProfile = async (s) => {
-    if (!s) { setProfile(null); return; }
-    const { data } = await supabase.from('profiles').select('*').eq('id', s.user.id).single();
-    setProfile(data);
-  };
-
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
       setSession(data.session);
-      await loadProfile(data.session);
+      setProfile(data.session ? await fetchProfile(data.session.user.id) : null);
       setLoading(false);
     });
-    const { data: sub } = supabase.auth.onAuthStateChange((e, s) => {
-      if (e === 'SIGNED_OUT') setExpiresAt(null);
+
+    const { data: sub } = supabase.auth.onAuthStateChange(async (_event, s) => {
+      if (_event === 'SIGNED_OUT') setExpiresAt(null);
       setSession(s);
-      loadProfile(s);
+      setProfile(s ? await fetchProfile(s.user.id) : null);
     });
+
     return () => sub.subscription.unsubscribe();
   }, []);
 
   const signIn = async (email, password) => {
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) throw error;
-    const { data: p } = await supabase.from('profiles').select('*').eq('id', data.user.id).single();
+
+    const p = await fetchProfile(data.user.id);
     if (p?.role !== 'admin') {
       await supabase.auth.signOut();
       throw new Error('This account is not an admin.');
     }
+
     setProfile(p);
-    sessionStorage.removeItem('rc_expired');
+    sessionStorage.removeItem(EXPIRED_FLAG);
     setExpiresAt(Date.now() + SESSION_MS);
   };
 
   const signOut = () => supabase.auth.signOut();
 
-  // Absolute 1h limit. Checked on an interval and on tab focus (timers pause while the laptop sleeps).
   useEffect(() => {
     if (!expiresAt) return;
+
     const check = () => {
       if (Date.now() >= expiresAt) {
-        sessionStorage.setItem('rc_expired', '1');
+        sessionStorage.setItem(EXPIRED_FLAG, '1');
         supabase.auth.signOut();
       }
     };
-    const id = setInterval(check, 15000);
+
+    const id = setInterval(check, EXPIRY_CHECK_MS);
     document.addEventListener('visibilitychange', check);
     check();
+
     return () => {
       clearInterval(id);
       document.removeEventListener('visibilitychange', check);
     };
   }, [expiresAt]);
 
-  return (
-    <AuthContext.Provider value={{ session, profile, loading, isAdmin: profile?.role === 'admin', signIn, signOut }}>
-      {children}
-    </AuthContext.Provider>
-  );
+  const value = {
+    session,
+    profile,
+    loading,
+    isAdmin: profile?.role === 'admin',
+    signIn,
+    signOut,
+  };
+
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }
 
 export const useAuth = () => useContext(AuthContext);

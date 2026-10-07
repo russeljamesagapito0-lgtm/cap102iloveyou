@@ -4,21 +4,23 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
 import Scans from './pages/Scans';
-import DiseaseContent from './pages/DiseaseContent';
-import Feedback from './pages/Feedback';
 import Audit from './pages/Audit';
+
+const protectedRoutes = [
+  { path: '/',      element: <Dashboard /> },
+  { path: '/users', element: <Users /> },
+  { path: '/scans', element: <Scans /> },
+  { path: '/audit', element: <Audit /> },
+];
 
 export default function App() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route element={<Layout />}>
-        <Route path="/"         element={<Dashboard />} />
-        <Route path="/users"    element={<Users />} />
-        <Route path="/scans"    element={<Scans />} />
-        <Route path="/diseases" element={<DiseaseContent />} />
-        <Route path="/feedback" element={<Feedback />} />
-        <Route path="/audit"    element={<Audit />} />
+        {protectedRoutes.map(({ path, element }) => (
+          <Route key={path} path={path} element={element} />
+        ))}
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

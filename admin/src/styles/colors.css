@@ -1,91 +1,83 @@
-/* src/styles/colors.css — Design tokens mirroring mobile ThemeContext */
-
 :root {
-  /* ===== LIGHT THEME (default) ===== */
-  --surface: #FFF8F6;
-  --surface-container: #FFE9E3;
-  --surface-container-low: #FFF1ED;
-  --surface-container-high: #FFE2DA;
-  --on-surface: #2C160E;
-  --on-surface-variant: #40493D;
-  --outline: #707A6C;
-  --outline-variant: #BFCABA;
+  --surface: #0a0a0a;
+  --surface-container: #141414;
+  --surface-container-low: #101010;
+  --surface-container-high: #1f1f1f;
+  --on-surface: #f5f5f5;
+  --on-surface-variant: #a3a3a3;
+  --outline: #737373;
+  --outline-variant: #262626;
 
-  --primary: #0D631B;
-  --on-primary: #FFFFFF;
-  --primary-container: #2E7D32;
-  --on-primary-container: #CBFFC2;
+  --primary: #6ee76e;
+  --on-primary: #0a1a0a;
+  --primary-container: #1a3a1a;
+  --on-primary-container: #b8f0b8;
 
-  --secondary: #7A5649;
-  --on-secondary: #FFFFFF;
-  --secondary-container: #FDCDBC;
+  --secondary: #a8a8a8;
+  --on-secondary: #0a0a0a;
+  --secondary-container: #1f1f1f;
 
-  --tertiary: #774C00;
-  --tertiary-container: #986200;
+  --tertiary: #f5a524;
+  --tertiary-container: #3a2a10;
 
-  --error: #BA1A1A;
-  --on-error: #FFFFFF;
-  --error-container: #FFDAD6;
-  --on-error-container: #93000A;
+  --error: #f87171;
+  --on-error: #2a0a0a;
+  --error-container: #3a1010;
+  --on-error-container: #fecaca;
 
-  /* App-level aliases (match mobile ThemeContext names) */
-  --background: #FFF8F6;
-  --card: #FFFFFF;
-  --text: #2C160E;
-  --textSecondary: #40493D;
-  --border: #BFCABA;
-  --accent: #0D631B;
+  --background: #0a0a0a;
+  --card: #141414;
+  --text: #f5f5f5;
+  --textSecondary: #a3a3a3;
+  --border: #262626;
+  --accent: #6ee76e;
 
-  /* Admin-only status colors */
-  --success-bg: #DFF5DD;
-  --success-text: #0D631B;
-  --warning-bg: #FFE8C7;
-  --warning-text: #774C00;
-  --info-bg: #DDE8FF;
-  --info-text: #1B4EA0;
+  --success-bg: #14351a;
+  --success-text: #6ee76e;
+  --warning-bg: #3a2a10;
+  --warning-text: #f5a524;
+  --info-bg: #102a4a;
+  --info-text: #7cb3ff;
 }
 
-[data-theme="dark"] {
-  /* ===== DARK THEME ===== */
-  --surface: #1A1A1A;
-  --surface-container: #2C2C2C;
-  --surface-container-low: #242424;
-  --surface-container-high: #383838;
-  --on-surface: #FFFFFF;
-  --on-surface-variant: #B0B0B0;
-  --outline: #888888;
-  --outline-variant: #444444;
+[data-theme="light"] {
+  --surface: #fafafa;
+  --surface-container: #f0f0f0;
+  --surface-container-low: #f5f5f5;
+  --surface-container-high: #e5e5e5;
+  --on-surface: #0a0a0a;
+  --on-surface-variant: #525252;
+  --outline: #737373;
+  --outline-variant: #d4d4d4;
 
-  --primary: #88D982;
-  --on-primary: #00390A;
-  --primary-container: #0D631B;
-  --on-primary-container: #CBFFC2;
+  --primary: #16a34a;
+  --on-primary: #ffffff;
+  --primary-container: #dcfce7;
+  --on-primary-container: #14532d;
 
-  --secondary: #E0BBAA;
-  --on-secondary: #442A20;
-  --secondary-container: #5D4037;
+  --secondary: #525252;
+  --on-secondary: #ffffff;
+  --secondary-container: #e5e5e5;
 
-  --tertiary: #FFB74D;
-  --tertiary-container: #5D4037;
+  --tertiary: #b45309;
+  --tertiary-container: #fef3c7;
 
-  --error: #FFB4AB;
-  --on-error: #690005;
-  --error-container: #93000A;
-  --on-error-container: #FFDAD6;
+  --error: #dc2626;
+  --on-error: #ffffff;
+  --error-container: #fee2e2;
+  --on-error-container: #7f1d1d;
 
-  /* App-level aliases */
-  --background: #121212;
-  --card: #1E1E1E;
-  --text: #FFFFFF;
-  --textSecondary: #B0B0B0;
-  --border: #444444;
-  --accent: #88D982;
+  --background: #fafafa;
+  --card: #ffffff;
+  --text: #0a0a0a;
+  --textSecondary: #525252;
+  --border: #e5e5e5;
+  --accent: #16a34a;
 
-  /* Status colors (dark variants) */
-  --success-bg: #1E3D20;
-  --success-text: #88D982;
-  --warning-bg: #4A3818;
-  --warning-text: #FFB74D;
-  --info-bg: #1F2D4A;
-  --info-text: #90B4FF;
+  --success-bg: #dcfce7;
+  --success-text: #15803d;
+  --warning-bg: #fef3c7;
+  --warning-text: #92400e;
+  --info-bg: #dbeafe;
+  --info-text: #1d4ed8;
 }

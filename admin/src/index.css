@@ -1,5 +1,3 @@
-/* src/index.css — global reset + app shell */
-
 * {
   box-sizing: border-box;
   margin: 0;
@@ -8,6 +6,11 @@
 
 html, body, #root {
   height: 100%;
+  width: 100%;
+}
+
+html, body {
+  overflow: hidden;
 }
 
 body {
@@ -24,28 +27,28 @@ button { font-family: inherit; cursor: pointer; }
 input, textarea, select { font-family: inherit; color: inherit; }
 a { color: inherit; }
 
-/* Layout shell */
 .app-shell {
   display: flex;
+  width: 100%;
   height: 100vh;
   overflow: hidden;
 }
 
 .main-area {
-  flex: 1;
+  flex: 1 1 auto;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
 
 .content {
-  flex: 1;
+  flex: 1 1 auto;
   overflow-y: auto;
   padding: 24px;
   background: var(--background);
 }
 
-/* Page header */
 .page-header { margin-bottom: 24px; }
 
 .page-title {
@@ -60,12 +63,10 @@ a { color: inherit; }
   margin-top: 4px;
 }
 
-/* Vertical stacking */
 .stack-lg > * + * { margin-top: 24px; }
 .stack-md > * + * { margin-top: 16px; }
 .stack-sm > * + * { margin-top: 8px; }
 
-/* Layout helpers */
 .flex-between {
   display: flex;
   align-items: center;

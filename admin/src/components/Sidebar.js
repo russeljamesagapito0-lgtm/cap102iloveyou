@@ -1,31 +1,39 @@
 import { NavLink } from 'react-router-dom';
+import Icon from './Icon';
 
-const links = [
-  { to: '/',         label: 'Dashboard' },
-  { to: '/users',    label: 'Users' },
-  { to: '/scans',    label: 'Scans' },
-  { to: '/diseases', label: 'Disease Info' },
-  { to: '/feedback', label: 'Feedback' },
-  { to: '/audit',    label: 'Audit Log' }
+const LINKS = [
+  { to: '/',      label: 'Dashboard', icon: 'dashboard' },
+  { to: '/users', label: 'Users',     icon: 'users' },
+  { to: '/scans', label: 'Scans',     icon: 'scans' },
+  { to: '/audit', label: 'Audit Log', icon: 'audit' },
 ];
+
+const navLinkClass = ({ isActive }) =>
+  'nav-link' + (isActive ? ' active' : '');
 
 export default function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
-        <h1>RootCare</h1>
-        <p>Admin Dashboard</p>
+        <img src="/emblem.png" alt="" className="sidebar-logo" />
+        <div className="sidebar-brand-text">
+          <h1>RootCare</h1>
+          <p>Admin Dashboard</p>
+        </div>
       </div>
 
       <nav className="sidebar-nav">
-        {links.map((l) => (
+        {LINKS.map(({ to, label, icon }) => (
           <NavLink
-            key={l.to}
-            to={l.to}
-            end={l.to === '/'}
-            className={({ isActive }) => 'nav-link' + (isActive ? ' active' : '')}
+            key={to}
+            to={to}
+            end={to === '/'}
+            className={navLinkClass}
           >
-            {l.label}
+            <span className="nav-icon">
+              <Icon name={icon} size={18} />
+            </span>
+            <span className="nav-label">{label}</span>
           </NavLink>
         ))}
       </nav>

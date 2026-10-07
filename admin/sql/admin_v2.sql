@@ -1,9 +1,6 @@
--- Run after admin_setup.sql. Safe to re-run.
 
--- Keep the AI's original prediction when an admin corrects a label (useful for retraining)
 alter table public.scans add column if not exists predicted_code text;
 
--- Audit log
 create table if not exists public.audit_log (
   id bigint generated always as identity primary key,
   admin_id uuid default auth.uid() references public.profiles(id) on delete set null,
@@ -19,7 +16,7 @@ drop policy if exists a_sel on public.audit_log; drop policy if exists a_ins on 
 create policy a_sel on public.audit_log for select using (public.is_admin());
 create policy a_ins on public.audit_log for insert with check (public.is_admin());
 
--- Disease translations (English stays in public.diseases)
+
 do $$
 begin
   execute format(

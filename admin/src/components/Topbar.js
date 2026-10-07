@@ -1,40 +1,36 @@
-import { useTheme } from '../context/ThemeContext';
-import { useAuth } from '../context/AuthContext';
+import { useLocation } from 'react-router-dom';
+import Avatar from './Avatar';
+import SettingsMenu from './SettingsMenu';
 
-export default function Topbar({ user }) {
-  const { isDarkMode, toggleDarkMode } = useTheme();
-  const { signOut } = useAuth();
+const PAGE_TITLES = {
+  '/':      'Dashboard',
+  '/users': 'Users',
+  '/scans': 'Scans',
+  '/audit': 'Audit Log',
+};
 
-  const initials = user.name
-    .split(' ')
-    .map((w) => w[0]?.toUpperCase())
-    .join('')
-    .slice(0, 2);
+const FALLBACK_TITLE = 'RootCare Admin';
+
+const resolveTitle = (pathname) => {
+  if (PAGE_TITLES[pathname]) return PAGE_TITLES[pathname];
+
+  const match = Object.entries(PAGE_TITLES).find(
+    ([path]) => path !== '/' && pathname.startsWith(path)
+  );
+
+  return match ? match[1] : FALLBACK_TITLE;
+};
+
+export default function Topbar() {
+  const { pathname } = useLocation();
+  const title = resolveTitle(pathname);
 
   return (
     <header className="topbar">
-      <input
-        className="topbar-search"
-        placeholder="Search users, scans, feedback..."
-      />
-
-      <div className="topbar-user">
-        <button
-          className="theme-toggle"
-          onClick={toggleDarkMode}
-          aria-label="Toggle theme"
-        >
-          {isDarkMode ? 'Light mode' : 'Dark mode'}
-        </button>
-
-        <button className="theme-toggle" onClick={signOut}>Sign out</button>
-
-        <div className="topbar-user-info">
-          <p className="topbar-user-name">{user.name}</p>
-          <p className="topbar-user-email">{user.email}</p>
-        </div>
-
-        <div className="avatar">{initials}</div>
+      <h1 className="topbar-title">{title}</h1>
+      <div className="topbar-right">
+        <Avatar size={32} />
+        <SettingsMenu align="down" />
       </div>
     </header>
   );

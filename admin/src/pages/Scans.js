@@ -4,20 +4,51 @@ import Modal from '../components/Modal';
 import { downloadCsv } from '../lib/csv';
 import { supabase, fmtDate, logAudit } from '../lib/supabase';
 
+const PAGE_SIZE = 1000;
+const LOW_CONFIDENCE = 0.7;
+
+const confidenceClass = (c) => {
+  if (c >= 0.8) return 'confidence confidence-high';
+  if (c >= 0.6) return 'confidence confidence-mid';
+  return 'confidence confidence-low';
+};
+
+const exportRow = (s) => ({
+  id: s.id,
+  created_at: s.created_at,
+  user_email: s.profiles?.email,
+  region: s.region,
+  predicted_label: s.predicted_code || s.disease_code,
+  final_label: s.disease_code,
+  confidence: s.confidence,
+  flagged: s.flagged,
+  corrected: s.corrected,
+  image_url: s.image_url,
+});
+
 export default function Scans() {
   const [scans, setScans] = useState([]);
   const [diseases, setDiseases] = useState([]);
+  const [filter, setFilter] = useState('all');
+  const [selected, setSelected] = useState(null);
+  const [newLabel, setNewLabel] = useState('');
 
   useEffect(() => {
     (async () => {
-      const { data: d } = await supabase.from('diseases').select('code,name').order('name');
+      const { data: d } = await supabase
+        .from('diseases')
+        .select('code,name')
+        .order('name');
+
       const names = Object.fromEntries((d || []).map((x) => [x.code, x.name]));
       setDiseases(d || []);
+
       const { data } = await supabase
         .from('scans')
         .select('*, profiles(full_name,email)')
         .order('created_at', { ascending: false })
         .limit(200);
+
       setScans(
         (data || []).map((s) => ({
           id: s.id,
@@ -30,20 +61,19 @@ export default function Scans() {
           region: s.region || '-',
           image_url: s.image_url,
           flagged: s.flagged,
-          corrected: s.corrected
+          corrected: s.corrected,
         }))
       );
     })();
   }, []);
-  const [filter, setFilter] = useState('all');
-  const [selected, setSelected] = useState(null);
-  const [newLabel, setNewLabel] = useState('');
 
   const filtered = scans.filter((s) => {
     if (filter === 'flagged') return s.flagged;
-    if (filter === 'low') return s.confidence < 0.7;
+    if (filter === 'low') return s.confidence < LOW_CONFIDENCE;
     return true;
   });
+
+  const flaggedCount = scans.filter((s) => s.flagged).length;
 
   const openModal = (s) => {
     setSelected(s);
@@ -52,17 +82,37 @@ export default function Scans() {
 
   const saveLabel = async () => {
     if (!selected) return;
+
     const { error } = await supabase
       .from('scans')
-      .update({ predicted_code: selected.predicted || selected.code, disease_code: newLabel, flagged: false, corrected: true })
+      .update({
+        predicted_code: selected.predicted || selected.code,
+        disease_code: newLabel,
+        flagged: false,
+        corrected: true,
+      })
       .eq('id', selected.id);
+
     if (error) return alert(error.message);
-    logAudit('update', 'scan', selected.id, { from: selected.code, to: newLabel });
+
+    logAudit('update', 'scan', selected.id, {
+      from: selected.code,
+      to: newLabel,
+    });
+
     const name = diseases.find((d) => d.code === newLabel)?.name || newLabel;
+
     setScans((prev) =>
       prev.map((s) =>
         s.id === selected.id
-          ? { ...s, predicted: s.predicted || s.code, code: newLabel, disease: name, flagged: false, corrected: true }
+          ? {
+              ...s,
+              predicted: s.predicted || s.code,
+              code: newLabel,
+              disease: name,
+              flagged: false,
+              corrected: true,
+            }
           : s
       )
     );
@@ -71,46 +121,34 @@ export default function Scans() {
 
   const exportCsv = async (onlyCorrected) => {
     let rows = [];
-    for (let from = 0; ; from += 1000) {
-      let q = supabase.from('scans').select('*, profiles(email)').order('created_at', { ascending: false }).range(from, from + 999);
+
+    for (let from = 0; ; from += PAGE_SIZE) {
+      let q = supabase
+        .from('scans')
+        .select('*, profiles(email)')
+        .order('created_at', { ascending: false })
+        .range(from, from + PAGE_SIZE - 1);
+
       if (onlyCorrected) q = q.eq('corrected', true);
+
       const { data, error } = await q;
       if (error) return alert(error.message);
-      rows = rows.concat(data);
-      if (data.length < 1000) break;
-    }
-    downloadCsv(
-      `scans${onlyCorrected ? '_corrected' : ''}_${new Date().toISOString().slice(0, 10)}.csv`,
-      rows.map((s) => ({
-        id: s.id,
-        created_at: s.created_at,
-        user_email: s.profiles?.email,
-        region: s.region,
-        predicted_label: s.predicted_code || s.disease_code,
-        final_label: s.disease_code,
-        confidence: s.confidence,
-        flagged: s.flagged,
-        corrected: s.corrected,
-        image_url: s.image_url
-      }))
-    );
-  };
 
-  const confidenceClass = (c) => {
-    if (c >= 0.8) return 'confidence confidence-high';
-    if (c >= 0.6) return 'confidence confidence-mid';
-    return 'confidence confidence-low';
+      rows = rows.concat(data);
+      if (data.length < PAGE_SIZE) break;
+    }
+
+    const suffix = onlyCorrected ? '_corrected' : '';
+    const date = new Date().toISOString().slice(0, 10);
+    downloadCsv(`scans${suffix}_${date}.csv`, rows.map(exportRow));
   };
 
   return (
     <div className="stack-lg">
       <div className="flex-between">
-        <div className="page-header" style={{ marginBottom: 0 }}>
-          <h1 className="page-title">Scans</h1>
-          <p className="page-subtitle">
-            {scans.length} scans · {scans.filter((s) => s.flagged).length} flagged for review
-          </p>
-        </div>
+        <p className="page-subtitle">
+          {scans.length} scans · {flaggedCount} flagged for review
+        </p>
 
         <div className="filter-bar">
           {['all', 'flagged', 'low'].map((f) => (
@@ -122,8 +160,12 @@ export default function Scans() {
               {f === 'all' ? 'All' : f === 'flagged' ? 'Flagged' : 'Low confidence'}
             </button>
           ))}
-          <button className="filter-btn" onClick={() => exportCsv(false)}>Export CSV</button>
-          <button className="filter-btn" onClick={() => exportCsv(true)}>Export corrected</button>
+          <button className="filter-btn" onClick={() => exportCsv(false)}>
+            Export CSV
+          </button>
+          <button className="filter-btn" onClick={() => exportCsv(true)}>
+            Export corrected
+          </button>
         </div>
       </div>
 
@@ -131,7 +173,11 @@ export default function Scans() {
         {filtered.map((s) => (
           <div key={s.id} className="scan-card">
             <div className="scan-thumb">
-              {s.image_url ? <img src={s.image_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : s.disease}
+              {s.image_url ? (
+                <img src={s.image_url} alt="" className="scan-img" />
+              ) : (
+                s.disease
+              )}
             </div>
             <div className="scan-body">
               <div className="scan-title-row">
@@ -153,9 +199,7 @@ export default function Scans() {
           </div>
         ))}
         {filtered.length === 0 && (
-          <div className="text-center text-muted" style={{ gridColumn: '1 / -1', padding: '40px 0' }}>
-            No scans match this filter.
-          </div>
+          <div className="scan-empty">No scans match this filter.</div>
         )}
       </div>
 
@@ -176,8 +220,12 @@ export default function Scans() {
       >
         {selected && (
           <div className="stack-md">
-            <div className="scan-thumb" style={{ height: 160, borderRadius: 8 }}>
-              {selected.image_url ? <img src={selected.image_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : selected.disease}
+            <div className="scan-thumb scan-thumb-lg">
+              {selected.image_url ? (
+                <img src={selected.image_url} alt="" className="scan-img" />
+              ) : (
+                selected.disease
+              )}
             </div>
 
             <div>
