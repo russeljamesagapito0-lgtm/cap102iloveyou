@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import Badge from '../components/Badge';
 import Modal from '../components/Modal';
+import { useConfirm } from '../components/ConfirmDialog';
+import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
 import { supabase, fmtDate, logAudit } from '../lib/supabase';
 
@@ -32,6 +34,8 @@ export default function Scans() {
   const [filter, setFilter] = useState('all');
   const [selected, setSelected] = useState(null);
   const [newLabel, setNewLabel] = useState('');
+  const confirm = useConfirm();
+  const toast = useToast();
 
   useEffect(() => {
     (async () => {
@@ -83,6 +87,17 @@ export default function Scans() {
   const saveLabel = async () => {
     if (!selected) return;
 
+    const newName = diseases.find((d) => d.code === newLabel)?.name || newLabel;
+
+    const ok = await confirm({
+      title: 'Save correction?',
+      message: `Change the label from "${selected.disease}" to "${newName}"? This will be logged in the audit trail.`,
+      confirmText: 'Save',
+      tone: 'primary',
+    });
+
+    if (!ok) return;
+
     const { error } = await supabase
       .from('scans')
       .update({
@@ -93,14 +108,15 @@ export default function Scans() {
       })
       .eq('id', selected.id);
 
-    if (error) return alert(error.message);
+    if (error) {
+      toast.error('Failed to save correction: ' + error.message);
+      return;
+    }
 
     logAudit('update', 'scan', selected.id, {
       from: selected.code,
       to: newLabel,
     });
-
-    const name = diseases.find((d) => d.code === newLabel)?.name || newLabel;
 
     setScans((prev) =>
       prev.map((s) =>
@@ -109,13 +125,15 @@ export default function Scans() {
               ...s,
               predicted: s.predicted || s.code,
               code: newLabel,
-              disease: name,
+              disease: newName,
               flagged: false,
               corrected: true,
             }
           : s
       )
     );
+
+    toast.success('Correction saved', { description: newName });
     setSelected(null);
   };
 
@@ -132,15 +150,26 @@ export default function Scans() {
       if (onlyCorrected) q = q.eq('corrected', true);
 
       const { data, error } = await q;
-      if (error) return alert(error.message);
+      if (error) {
+        toast.error('Export failed: ' + error.message);
+        return;
+      }
 
       rows = rows.concat(data);
       if (data.length < PAGE_SIZE) break;
     }
 
+    if (!rows.length) {
+      toast.info('Nothing to export');
+      return;
+    }
+
     const suffix = onlyCorrected ? '_corrected' : '';
     const date = new Date().toISOString().slice(0, 10);
     downloadCsv(`scans${suffix}_${date}.csv`, rows.map(exportRow));
+    toast.success('Export downloaded', {
+      description: `${rows.length} rows`,
+    });
   };
 
   return (

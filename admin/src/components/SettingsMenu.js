@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
+import { useConfirm } from './ConfirmDialog';
+import { useToast } from '../context/ToastContext';
 import { supabase, fmtDate } from '../lib/supabase';
 import { downloadCsv } from '../lib/csv';
 import Icon from './Icon';
@@ -44,7 +46,7 @@ const computePosition = (rect, align) => {
   return { top, left };
 };
 
-export default function SettingsMenu({ align = 'up' }) {
+export default function SettingsMenu({ align = 'down' }) {
   const { isDarkMode, toggleDarkMode } = useTheme();
   const { profile, signOut } = useAuth();
   const [open, setOpen] = useState(false);
@@ -52,6 +54,8 @@ export default function SettingsMenu({ align = 'up' }) {
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const btnRef = useRef(null);
   const menuRef = useRef(null);
+  const confirm = useConfirm();
+  const toast = useToast();
 
   useEffect(() => {
     if (!open || !btnRef.current) return;
@@ -82,6 +86,13 @@ export default function SettingsMenu({ align = 'up' }) {
 
   const handleSignOut = async () => {
     setOpen(false);
+    const ok = await confirm({
+      title: 'Sign out?',
+      message: 'You will need to sign in again to continue.',
+      confirmText: 'Sign out',
+      tone: 'danger',
+    });
+    if (!ok) return;
     await signOut();
   };
 
@@ -94,8 +105,9 @@ export default function SettingsMenu({ align = 'up' }) {
 
       const date = new Date().toISOString().slice(0, 10);
       downloadCsv(`rootcare-dashboard-${date}.csv`, buildDashboardRows(data));
+      toast.success('Report downloaded', { description: `rootcare-dashboard-${date}.csv` });
     } catch (e) {
-      alert('Export failed: ' + (e?.message || e));
+      toast.error('Export failed: ' + (e?.message || e));
     } finally {
       setExporting(false);
     }

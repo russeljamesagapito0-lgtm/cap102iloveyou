@@ -1,5 +1,7 @@
 import { useState, useEffect } from 'react';
 import Modal from '../components/Modal';
+import { useConfirm } from '../components/ConfirmDialog';
+import { useToast } from '../context/ToastContext';
 import { supabase, fmtDate, logAudit } from '../lib/supabase';
 
 const mapProfile = (p) => ({
@@ -18,6 +20,8 @@ export default function Users() {
   const [users, setUsers] = useState([]);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(null);
+  const confirm = useConfirm();
+  const toast = useToast();
 
   useEffect(() => {
     supabase
@@ -35,28 +39,46 @@ export default function Users() {
   const toggleStatus = async () => {
     if (!selected) return;
 
-    const status = selected.status === 'active' ? 'suspended' : 'active';
+    const isActive = selected.status === 'active';
+    const nextStatus = isActive ? 'suspended' : 'active';
+
+    const ok = await confirm({
+      title: isActive ? 'Suspend user?' : 'Reactivate user?',
+      message: isActive
+        ? `${selected.name} will lose access to RootCare until reactivated.`
+        : `${selected.name} will regain access to RootCare.`,
+      confirmText: isActive ? 'Suspend' : 'Reactivate',
+      tone: isActive ? 'danger' : 'primary',
+    });
+
+    if (!ok) return;
+
     const { error } = await supabase
       .from('profiles')
-      .update({ status })
+      .update({ status: nextStatus })
       .eq('id', selected.id);
 
-    if (error) return alert(error.message);
+    if (error) {
+      toast.error('Failed to update user: ' + error.message);
+      return;
+    }
 
-    logAudit(
-      status === 'suspended' ? 'suspend' : 'reactivate',
-      'user',
-      selected.id,
-      { email: selected.email }
-    );
+    logAudit(isActive ? 'suspend' : 'reactivate', 'user', selected.id, {
+      email: selected.email,
+    });
 
     setUsers((prev) =>
-      prev.map((u) => (u.id === selected.id ? { ...u, status } : u))
+      prev.map((u) => (u.id === selected.id ? { ...u, status: nextStatus } : u))
     );
+
+    toast.success(isActive ? 'User suspended' : 'User reactivated', {
+      description: selected.name,
+    });
+
     setSelected(null);
   };
 
-  const isActive = selected?.status === 'active';
+  const selectedIsActive = selected?.status === 'active';
 
   return (
     <div className="stack-lg">
@@ -119,10 +141,10 @@ export default function Users() {
               Cancel
             </button>
             <button
-              className={'btn ' + (isActive ? 'btn-danger' : 'btn-primary')}
+              className={'btn ' + (selectedIsActive ? 'btn-danger' : 'btn-primary')}
               onClick={toggleStatus}
             >
-              {isActive ? 'Suspend user' : 'Reactivate user'}
+              {selectedIsActive ? 'Suspend user' : 'Reactivate user'}
             </button>
           </>
         }
