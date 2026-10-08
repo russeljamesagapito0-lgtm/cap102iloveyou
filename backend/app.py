@@ -43,7 +43,7 @@ def after_request(response):
     return response
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), 'models', 'rootcare_cassava_model_resnet50v2.tflite')
-IMAGE_SIZE = 224
+IMAGE_SIZE = 384
 
 CONFIDENCE_THRESHOLD = 0.65  
 GREEN_RATIO_THRESHOLD = 0.15 
@@ -237,7 +237,6 @@ def preprocess_image(image_data):
 
         # ResNet50V2 preprocessing: scale from [0, 255] to [-1, 1]
         image_array = np.array(image, dtype=np.float32)
-        image_array = (image_array / 127.5) - 1.0
         image_array = np.expand_dims(image_array, axis=0)
 
         return image_array, original_image

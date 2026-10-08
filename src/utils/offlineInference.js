@@ -1,11 +1,10 @@
-import { NitroModules } from 'react-native-nitro-modules';
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { Buffer } from 'buffer';
 import { Skia, ColorType, AlphaType } from '@shopify/react-native-skia';
+import { loadTensorflowModel } from 'react-native-fast-tflite';
 
-const IMAGE_SIZE = 224;
+const IMAGE_SIZE = 384;
 const CONFIDENCE_THRESHOLD = 0.65;
 const GREEN_RATIO_THRESHOLD = 0.15;
 const ENTROPY_THRESHOLD = 0.75;
@@ -34,7 +33,8 @@ const CLASS_NAMES = [
   'Healthy',
 ];
 
-const MODEL_FILENAME = 'rootcare_cassava_model_resnet50v2.tflite';
+const MODEL_FILENAME = 'rootcare_cassava_convnext_384.tflite';
+const OLD_MODEL_FILENAME = 'rootcare_cassava_model_resnet50v2.tflite';
 const LOCAL_MODEL_PATH = FileSystem.documentDirectory + MODEL_FILENAME;
 
 let _model = null;
@@ -46,45 +46,34 @@ export const loadOfflineModel = async () => {
 
   _loading = (async () => {
     try {
+      // Remove the orphaned old model on phones that already had the app
+      FileSystem.deleteAsync(FileSystem.documentDirectory + OLD_MODEL_FILENAME, {
+        idempotent: true,
+      }).catch(() => {});
+
       const info = await FileSystem.getInfoAsync(LOCAL_MODEL_PATH);
       if (!info.exists) {
         console.log('Copying model to documentDirectory...');
         const asset = Asset.fromModule(
-          require('../assets/rootcare_cassava_model_resnet50v2.tflite')
+          require('../assets/rootcare_cassava_convnext_384.tflite')
         );
         await asset.downloadAsync();
+        if (!asset.localUri) throw new Error('Asset did not resolve to a local URI');
 
-        if (!asset.localUri) {
-          throw new Error('Asset did not resolve to a local URI');
-        }
-
-        await FileSystem.copyAsync({
-          from: asset.localUri,
-          to: LOCAL_MODEL_PATH,
-        });
+        // Copy to a temp name, then rename, so a killed app mid-copy
+        // can't leave a half-written 107 MB file that looks "cached"
+        const tmpPath = LOCAL_MODEL_PATH + '.tmp';
+        await FileSystem.deleteAsync(tmpPath, { idempotent: true });
+        await FileSystem.copyAsync({ from: asset.localUri, to: tmpPath });
+        await FileSystem.moveAsync({ from: tmpPath, to: LOCAL_MODEL_PATH });
         console.log('Model copied to:', LOCAL_MODEL_PATH);
       } else {
         console.log('Model already cached at:', LOCAL_MODEL_PATH);
       }
 
-      console.log('Reading model bytes into JS...');
-      const base64 = await FileSystem.readAsStringAsync(LOCAL_MODEL_PATH, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      const binaryString = Buffer.from(base64, 'base64').toString('binary');
-      const arrayBuffer = new ArrayBuffer(binaryString.length);
-      const view = new Uint8Array(arrayBuffer);
-      for (let i = 0; i < binaryString.length; i++) {
-        view[i] = binaryString.charCodeAt(i);
-      }
-
-      const tfliteModule = NitroModules.createHybridObject('TfliteModule');
-      const model = tfliteModule.createModel(arrayBuffer, []);
-
-      _model = model;
+      _model = await loadTensorflowModel({ url: LOCAL_MODEL_PATH }, []);
       console.log('Offline TFLite model loaded');
-      return model;
+      return _model;
     } catch (e) {
       console.error('Failed to load TFLite model:', e?.message || String(e));
       _loading = null;
@@ -117,12 +106,12 @@ const decodeImageNative = async (uri) => {
   return { data: pixels, width, height }; 
 };
 
-const buildInputTensor = (rgba224) => {
+const buildInputTensor = (rgba) => {
   const out = new Float32Array(IMAGE_SIZE * IMAGE_SIZE * 3);
-  for (let i = 0, j = 0; i < rgba224.length; i += 4, j += 3) {
-    out[j]     = rgba224[i]     / 127.5 - 1.0;
-    out[j + 1] = rgba224[i + 1] / 127.5 - 1.0;
-    out[j + 2] = rgba224[i + 2] / 127.5 - 1.0;
+  for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+    out[j]     = rgba[i];       // raw 0-255, matches the model's built-in preprocessing
+    out[j + 1] = rgba[i + 1];
+    out[j + 2] = rgba[i + 2];
   }
   return out;
 };
@@ -192,15 +181,10 @@ export const runOfflineInference = async (imageUri) => {
   const model = await loadOfflineModel();
 
   const manipulated = await ImageManipulator.manipulateAsync(
-    imageUri,
-    [{ resize: { width: IMAGE_SIZE, height: IMAGE_SIZE } }],
-    { format: ImageManipulator.SaveFormat.JPEG, compress: 0.9, base64: true }
-  );
-
-  const base64 = manipulated.base64;
-  if (!base64) {
-    throw new Error('ImageManipulator did not return base64 data');
-  }
+  imageUri,
+  [{ resize: { width: IMAGE_SIZE, height: IMAGE_SIZE } }],
+  { format: ImageManipulator.SaveFormat.JPEG, compress: 0.9 }
+);
 
   const { data: rgba, width, height } = await decodeImageNative(manipulated.uri);
 

@@ -5,7 +5,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import * as FileSystem from 'expo-file-system';
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
 import { useFocusEffect } from '@react-navigation/native';
@@ -13,6 +12,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { runOfflineInference, loadOfflineModel } from '../utils/offlineInference';
 import { enqueueMutation, generateScanId, flushQueue } from '../utils/syncManager';
 import { DISEASE_INFO } from '../constants/diseaseInfo';
+import * as FileSystem from 'expo-file-system/legacy';
 
 const { width, height } = Dimensions.get('window');
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://172.167.134.221:5000';
@@ -168,7 +168,7 @@ const checkApiHealth = async (attempt = 0) => {
   const preprocessImage = async (imageUri) => {
     const manipulatedImage = await ImageManipulator.manipulateAsync(
       imageUri,
-      [{ resize: { width: 224, height: 224 } }],
+      [{ resize: { width: 384, height: 384 } }],
       { format: ImageManipulator.SaveFormat.JPEG, compress: 0.9 }
     );
     const response = await fetch(manipulatedImage.uri);
@@ -214,7 +214,7 @@ const checkApiHealth = async (attempt = 0) => {
           capturedAt: new Date().toISOString(),
           diagnosisCode: result.diseaseKey,
           confidence: result.confidence,
-          modelVersion: 'resnet50v2-tflite-v1',
+         modelVersion: 'convnext-384-tflite-v1',
           inferredAt: new Date().toISOString(),
         },
       });

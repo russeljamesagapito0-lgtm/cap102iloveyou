@@ -16,7 +16,7 @@ export const DISEASE_INFO = {
     symptoms: 'Chlorotic leaf spots, brown streaks on stems, root necrosis with brown lesions.'
   },
   CGM: {
-    name: 'Cassava Green Mite',
+    name: 'Cassava Green Mottle',
     description: 'A pest caused by Mononychellus tanajoa, feeding on cassava leaves and causing damage.',
     treatment: 'Apply acaricides, introduce predatory mites for biological control.',
     prevention: 'Use resistant varieties, maintain proper plant spacing, monitor mite populations.',
