@@ -1,15 +1,31 @@
 import { File } from 'expo-file-system';
-import { GoogleGenAI } from '@google/genai';
+import Toast from 'react-native-toast-message';
 import { supabase } from './supabaseClient';
 
 const API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
 const MODEL = process.env.EXPO_PUBLIC_GEMINI_MODEL || 'gemini-3.8-flash';
 
-if (!API_KEY) {
-  console.error('Missing EXPO_PUBLIC_GEMINI_API_KEY in .env');
-}
+let ai = null;
+let aiInitAttempted = false;
 
-const ai = new GoogleGenAI({ apiKey: API_KEY });
+const getAI = async () => {
+  if (aiInitAttempted) return ai;
+  aiInitAttempted = true;
+
+  if (!API_KEY) {
+    console.warn('Missing EXPO_PUBLIC_GEMINI_API_KEY in .env');
+    return null;
+  }
+
+  try {
+    const mod = await import('@google/genai/web');
+    ai = new mod.GoogleGenAI({ apiKey: API_KEY });
+    return ai;
+  } catch (err) {
+    console.warn('Failed to init Gemini:', err?.message);
+    return null;
+  }
+};
 
 const RECENT_MESSAGE_LIMIT = 10;
 const SCAN_CACHE_TTL_MS = 5 * 60_000;
@@ -28,7 +44,6 @@ Guidelines:
 - Never invent pesticide names or dosages. Recommend general categories (for example, "copper-based fungicide") and suggest consulting a local agricultural officer for specifics.
 - If scan history is provided, use it to personalize advice.`;
 
-// ---- Scan history cache ----
 let cachedScans = null;
 let cachedScansAt = 0;
 let inFlightScans = null;
@@ -111,28 +126,40 @@ const buildInput = (conversation, userContent, contextBlock) => {
 const friendlyError = (error, fallback) => {
   const msg = error?.message || '';
   if (msg.includes('429') || msg.includes('rate')) {
-    return 'I am receiving too many requests right now. Please wait a moment and try again.';
+    return 'Too many requests right now. Please wait a moment and try again.';
   }
   if (msg.includes('network') || msg.includes('fetch')) {
-    return 'I could not reach the server. Please check your internet connection.';
+    return 'Could not reach the server. Check your internet connection.';
   }
   if (msg.includes('401') || msg.includes('403')) {
-    return 'The AI service is temporarily unavailable. Please try again later.';
+    return 'The AI service is temporarily unavailable. Try again later.';
   }
   return fallback;
 };
 
+const showAIToast = (title, message) => {
+  Toast.show({
+    type: 'error',
+    text1: title,
+    text2: message,
+    visibilityTime: 3500,
+    position: 'top',
+  });
+};
+
 export async function sendChatMessage(conversation, userMessage) {
   try {
+    const client = await getAI();
+    if (!client) {
+      showAIToast('AI Not Configured', 'Please restart the app.');
+      return { success: false, text: 'AI is not configured.' };
+    }
+
     const scans = await loadRecentScans();
     const contextBlock = buildScanContext(scans);
-    const input = buildInput(
-      conversation,
-      [{ type: 'text', text: userMessage }],
-      contextBlock
-    );
+    const input = buildInput(conversation, [{ type: 'text', text: userMessage }], contextBlock);
 
-    const interaction = await ai.interactions.create({
+    const interaction = await client.interactions.create({
       model: MODEL,
       input,
       generation_config: { thinking_level: CHAT_THINKING_LEVEL },
@@ -143,50 +170,21 @@ export async function sendChatMessage(conversation, userMessage) {
       text: interaction.output_text || 'Sorry, I did not catch that.',
     };
   } catch (error) {
-    console.error('AI chat error:', error);
-    return { success: false, text: friendlyError(error, 'Sorry, something went wrong. Please try again.') };
-  }
-}
-
-export async function sendChatMessageStream(conversation, userMessage, onToken) {
-  try {
-    const scans = await loadRecentScans();
-    const contextBlock = buildScanContext(scans);
-    const input = buildInput(
-      conversation,
-      [{ type: 'text', text: userMessage }],
-      contextBlock
-    );
-
-    const stream = await ai.interactions.create({
-      model: MODEL,
-      input,
-      generation_config: { thinking_level: CHAT_THINKING_LEVEL },
-      stream: true,
-    });
-
-    let full = '';
-    for await (const event of stream) {
-      if (
-        event?.event_type === 'step.delta' &&
-        event?.delta?.type === 'text' &&
-        typeof event.delta.text === 'string'
-      ) {
-        full += event.delta.text;
-        onToken?.(event.delta.text);
-      }
-    }
-
-    if (!full) full = 'Sorry, I did not catch that.';
-    return { success: true, text: full };
-  } catch (error) {
-    console.error('AI chat stream error:', error);
-    return { success: false, text: friendlyError(error, 'Sorry, something went wrong. Please try again.') };
+    console.warn('AI chat error:', error?.message);
+    const msg = friendlyError(error, 'Something went wrong. Please try again.');
+    showAIToast('AI Error', msg);
+    return { success: false, text: msg };
   }
 }
 
 export async function sendChatWithImage(conversation, userMessage, imageUri) {
   try {
+    const client = await getAI();
+    if (!client) {
+      showAIToast('AI Not Configured', 'Please restart the app.');
+      return { success: false, text: 'AI is not configured.' };
+    }
+
     const scans = await loadRecentScans();
     const contextBlock = buildScanContext(scans);
 
@@ -205,7 +203,7 @@ export async function sendChatWithImage(conversation, userMessage, imageUri) {
       contextBlock
     );
 
-    const interaction = await ai.interactions.create({
+    const interaction = await client.interactions.create({
       model: MODEL,
       input,
       generation_config: { thinking_level: IMAGE_THINKING_LEVEL },
@@ -216,14 +214,21 @@ export async function sendChatWithImage(conversation, userMessage, imageUri) {
       text: interaction.output_text || 'Sorry, I could not analyze that image.',
     };
   } catch (error) {
-    console.error('AI image error:', error);
-    return { success: false, text: friendlyError(error, 'Sorry, I could not analyze that image. Please try again.') };
+    console.warn('AI image error:', error?.message);
+    const msg = friendlyError(error, 'Could not analyze that image. Please try again.');
+    showAIToast('AI Image Error', msg);
+    return { success: false, text: msg };
   }
 }
 
-// ---- Crop scan (JSON output via Gemini 2.5 Vision) ----
 export async function analyzeCropImage(imageUri) {
   try {
+    const client = await getAI();
+    if (!client) {
+      showAIToast('AI Not Configured', 'Please restart the app.');
+      return { success: false, error: 'AI is not configured.' };
+    }
+
     const file = new File(imageUri);
     const base64 = await file.base64();
 
@@ -245,8 +250,8 @@ Return ONLY a JSON object with these exact fields (no markdown, no code fences, 
   "notes": "any extra observations, or empty string"
 }`;
 
-    const interaction = await ai.interactions.create({
-      model: 'gemini-2.5-flash',
+    const interaction = await client.interactions.create({
+      model: 'gemini-3.8-flash',
       input: [
         {
           type: 'user_input',
@@ -283,7 +288,8 @@ Return ONLY a JSON object with these exact fields (no markdown, no code fences, 
       },
     };
   } catch (error) {
-    console.error('Gemini scan error:', error);
+    console.warn('Gemini scan error:', error?.message);
+    showAIToast('AI Scan Error', "Couldn't analyze the image. Please try again.");
     return { success: false, error: error?.message || 'Analysis failed' };
   }
 }

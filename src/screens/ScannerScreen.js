@@ -13,6 +13,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { runOfflineInference, loadOfflineModel } from '../utils/offlineInference';
 import { enqueueMutation, generateScanId, flushQueue } from '../utils/syncManager';
 import { DISEASE_INFO } from '../constants/diseaseInfo';
+import { analyzeCropImage } from '../utils/aiClient';
 
 const { width, height } = Dimensions.get('window');
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://172.167.134.221:5000';
@@ -23,6 +24,9 @@ const MAX_RETRIES = parseInt(process.env.EXPO_PUBLIC_MAX_RETRIES || '3');
 const DEBUG = process.env.EXPO_PUBLIC_DEBUG === 'true';
 
 const COMPUTER_IP = API_BASE_URL.replace('http://', '').replace(':5000', '');
+
+// Confidence threshold: below this, we try Gemini Vision
+const GEMINI_FALLBACK_THRESHOLD = 70;
 
 if (DEBUG) {
   console.log(' API Base URL:', API_BASE_URL);
@@ -110,41 +114,41 @@ const ScannerScreen = ({ navigation, route }) => {
     }, [navigation, route.params?.clearImage])
   );
 
-const checkApiHealth = async (attempt = 0) => {
-  if (DEBUG) console.log(' Checking API health (attempt ' + (attempt + 1) + '):', HEALTH_URL);
-  try {
-    const response = await fetchWithTimeout(HEALTH_URL, { method: 'GET' }, 5000);
-    if (response.ok) {
-      const data = await response.json();
-      if (DEBUG) console.log(' Server healthy:', data);
-      setIsApiReady(true);
-      setApiCheckDone(true);
-      setRetryCount(0);
-      return true;
-    }
-    throw new Error('Server error');
-  } catch (error) {
-    if (DEBUG) console.log(' Server unreachable:', error?.message);
+  const checkApiHealth = async (attempt = 0) => {
+    if (DEBUG) console.log(' Checking API health (attempt ' + (attempt + 1) + '):', HEALTH_URL);
+    try {
+      const response = await fetchWithTimeout(HEALTH_URL, { method: 'GET' }, 5000);
+      if (response.ok) {
+        const data = await response.json();
+        if (DEBUG) console.log(' Server healthy:', data);
+        setIsApiReady(true);
+        setApiCheckDone(true);
+        setRetryCount(0);
+        return true;
+      }
+      throw new Error('Server error');
+    } catch (error) {
+      if (DEBUG) console.log(' Server unreachable:', error?.message);
 
-    if (attempt < MAX_RETRIES) {
-      setRetryCount(attempt + 1);
-      setTimeout(() => checkApiHealth(attempt + 1), 2000);
+      if (attempt < MAX_RETRIES) {
+        setRetryCount(attempt + 1);
+        setTimeout(() => checkApiHealth(attempt + 1), 2000);
+        return false;
+      }
+
+      setIsApiReady(false);
+      setApiCheckDone(true);
+
+      Toast.show({
+        type: 'info',
+        text1: 'Offline Mode Active',
+        text2: 'Server unreachable. Offline scanning is ready.',
+        visibilityTime: 3000,
+      });
+
       return false;
     }
-
-    setIsApiReady(false);
-    setApiCheckDone(true);
-
-    Toast.show({
-      type: 'info',
-      text1: 'Offline Mode Active',
-      text2: 'Server unreachable. Offline scanning is ready.',
-      visibilityTime: 3000,
-    });
-
-    return false;
-  }
-};
+  };
 
   const startScanLineAnimation = () => {
     scanLineAnim.setValue(0);
@@ -196,6 +200,7 @@ const checkApiHealth = async (attempt = 0) => {
       allProbabilities: result.allProbabilities || {},
       detectionMetrics: result.detection_metrics || {},
       offline: !!result._offline,
+      enhancedByAI: !!result._enhancedByAI,
     });
   };
 
@@ -224,6 +229,39 @@ const checkApiHealth = async (attempt = 0) => {
     }
   };
 
+  // Map a Gemini response into the shape ScannerScreen/ResultScreen expects
+  const normalizeGeminiResult = (geminiData, fallbackResult) => {
+    const keyMap = {
+      'Cassava Mosaic Disease': 'CMD',
+      'Cassava Brown Streak Disease': 'CBSD',
+      'Cassava Bacterial Blight': 'CBB',
+      'Cassava Green Mite': 'CGM',
+      'Cassava Anthracnose': 'CAD',
+      'Brown Spot Disease': 'CBSD',
+      'Healthy': 'HEALTHY',
+    };
+    const diseaseKey =
+      keyMap[geminiData.disease_name] ||
+      fallbackResult?.diseaseKey ||
+      'UNKNOWN';
+
+    return {
+      success: true,
+      diseaseKey,
+      diseaseName: geminiData.disease_name,
+      confidence: geminiData.confidence,
+      description: geminiData.description,
+      treatment: geminiData.treatment,
+      prevention: geminiData.prevention,
+      severity: geminiData.severity,
+      symptoms: geminiData.symptoms,
+      allProbabilities: fallbackResult?.allProbabilities || {},
+      detection_metrics: fallbackResult?.detection_metrics || {},
+      _offline: true,
+      _enhancedByAI: true,
+    };
+  };
+
   const analyzeImage = async () => {
     if (!image) {
       Toast.show({
@@ -237,6 +275,7 @@ const checkApiHealth = async (attempt = 0) => {
     setLoading(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
+    // ---- Path 1: Flask API (online) ----
     if (isApiReady && isOnline) {
       try {
         const base64Image = await preprocessImage(image);
@@ -286,6 +325,7 @@ const checkApiHealth = async (attempt = 0) => {
       }
     }
 
+    // ---- Path 2: TFLite (offline) ----
     if (!offlineReady) {
       setLoading(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -299,26 +339,24 @@ const checkApiHealth = async (attempt = 0) => {
     }
 
     try {
-      const result = await runOfflineInference(image);
+      const tfliteResult = await runOfflineInference(image);
 
-      if (result.success === false && result.error === 'not_cassava') {
+      if (tfliteResult.success === false && tfliteResult.error === 'not_cassava') {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
         Toast.show({
           type: 'info',
           text1: 'Not a Cassava Leaf',
-          text2: result.message,
+          text2: tfliteResult.message,
           visibilityTime: 4000,
         });
         setLoading(false);
         return;
       }
 
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-
-      // Enrich with local disease info (server normally provides this)
-      const info = DISEASE_INFO[result.diseaseKey];
-      const enriched = {
-        ...result,
+      // Enrich with local disease info
+      const info = DISEASE_INFO[tfliteResult.diseaseKey];
+      let enriched = {
+        ...tfliteResult,
         description: info?.description || '',
         treatment: info?.treatment || '',
         prevention: info?.prevention || '',
@@ -326,15 +364,55 @@ const checkApiHealth = async (attempt = 0) => {
         symptoms: info?.symptoms || '',
       };
 
-      // Queue for later sync
-      await queueOfflineScan(image, result);
+      // ---- Path 3: Gemini Vision (only if low confidence + online) ----
+      const lowConfidence =
+        typeof tfliteResult.confidence === 'number' &&
+        tfliteResult.confidence < GEMINI_FALLBACK_THRESHOLD;
 
-      Toast.show({
-        type: 'info',
-        text1: 'Offline Result',
-        text2: 'Saved locally — will sync when online.',
-        visibilityTime: 3000,
-      });
+      if (lowConfidence && isOnline) {
+        if (DEBUG) console.log('TFLite confidence low, trying Gemini...');
+
+        Toast.show({
+          type: 'info',
+          text1: 'Enhancing with AI...',
+          text2: 'TFLite was uncertain — checking with Gemini.',
+          visibilityTime: 2000,
+        });
+
+        const geminiResponse = await analyzeCropImage(image);
+
+        if (geminiResponse.success && geminiResponse.data) {
+          if (DEBUG) console.log('Gemini result:', geminiResponse.data);
+          enriched = normalizeGeminiResult(geminiResponse.data, tfliteResult);
+
+          Toast.show({
+            type: 'success',
+            text1: 'Enhanced by AI',
+            text2: 'Gemini analyzed your leaf.',
+            visibilityTime: 2000,
+          });
+        } else {
+          if (DEBUG) console.log('Gemini failed, keeping TFLite result');
+          Toast.show({
+            type: 'info',
+            text1: 'Offline Result',
+            text2: 'AI enhancement unavailable — using local model.',
+            visibilityTime: 2500,
+          });
+        }
+      } else {
+        Toast.show({
+          type: 'info',
+          text1: 'Offline Result',
+          text2: 'Saved locally — will sync when online.',
+          visibilityTime: 3000,
+        });
+      }
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      // Queue for later sync (based on original TFLite result)
+      await queueOfflineScan(image, tfliteResult);
 
       navigateToResult(enriched, image);
     } catch (error) {
@@ -425,7 +503,6 @@ const checkApiHealth = async (attempt = 0) => {
 
   return (
     <SafeAreaView style={styles.container} edges={['top']}>
-      {/* Top Bar */}
       <View style={styles.topBar}>
         <TouchableOpacity
           style={styles.topControlBtn}
@@ -438,7 +515,6 @@ const checkApiHealth = async (attempt = 0) => {
         <View style={{ width: 40 }} />
       </View>
 
-      {/* Status Bar */}
       {apiCheckDone && !isApiReady && (
         <View style={styles.serverErrorBar}>
           <Ionicons name="cloud-offline-outline" size={16} color="#FFFFFF" />
