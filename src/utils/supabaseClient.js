@@ -3,7 +3,7 @@ import * as SecureStore from 'expo-secure-store';
 import Constants from 'expo-constants';
 import 'react-native-url-polyfill/auto';
 
-// SecureStore adapter with chunking for large values
+
 const SecureStoreAdapter = {
   getItem: async (key) => {
     try {

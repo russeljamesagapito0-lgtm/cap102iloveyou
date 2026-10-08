@@ -1,16 +1,13 @@
 ﻿import { Buffer } from 'buffer';
 global.Buffer = global.Buffer || Buffer;
-
 import React, { useState, useEffect } from 'react';
 import { NavigationContainer, DefaultTheme as NavDefaultTheme, DarkTheme as NavDarkTheme } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { View, ActivityIndicator } from 'react-native';
 import Toast from 'react-native-toast-message';
 import NetInfo from '@react-native-community/netinfo';
-
 import { supabase } from './src/utils/supabaseClient';
 import { ThemeProvider, useTheme } from './src/context/ThemeContext';
-
 import OnboardingScreen from './src/screens/OnboardingScreen';
 import LoginScreen from './src/screens/LoginScreen';
 import RegisterScreen from './src/screens/RegisterScreen';

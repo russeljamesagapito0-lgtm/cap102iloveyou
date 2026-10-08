@@ -1,4 +1,5 @@
-﻿import React, { useState, useRef, useEffect } from 'react';
+﻿// screens/ChatbotScreen.js
+import React, { useState, useRef, useEffect } from 'react';
 import {
   View,
   Text,
@@ -14,14 +15,15 @@ import {
   Image,
   Animated,
   Keyboard,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
-import { useBottomTabBarHeight } from '@react-navigation/bottom-tabs';
 import { useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '../context/ThemeContext';
+import { sendChatMessage, sendChatWithImage } from '../utils/aiClient';
 
 const { width } = Dimensions.get('window');
 const SIDEBAR_WIDTH = Math.min(340, width * 0.85);
@@ -33,37 +35,39 @@ const findTabNavigator = (navigation) => {
   return nav;
 };
 
+const INITIAL_MESSAGE = {
+  id: 'init',
+  text: "Hello! I'm RootCare Companion. Ask me anything about cassava or root crop farming — or attach a photo of a leaf for a quick check.",
+  sender: 'bot',
+};
+
 const ChatbotScreen = ({ navigation }) => {
   const { themeColors, isDarkMode } = useTheme();
 
-  const [messages, setMessages] = useState([
-    { id: '1', text: 'Hello! How can I help you with your root crop farming today?', sender: 'bot' },
-  ]);
+  const [messages, setMessages] = useState([INITIAL_MESSAGE]);
   const [inputText, setInputText] = useState('');
   const [suggestedTopics] = useState([
     { id: '1', text: 'What are the best root crop varieties to plant?', icon: 'leaf-outline' },
-    { id: '2', text: 'How do I treat common root crop diseases?', icon: 'medical-outline' },
-    { id: '3', text: 'When is the right time to harvest root crops?', icon: 'calendar-outline' },
-    { id: '4', text: 'What type of fertilizer is best for root crops?', icon: 'flower-outline' },
-  ]);
-  const [conversationHistory] = useState([
-    { id: '1', title: 'Cassava Mosaic Disease', date: 'Today, 2:30 PM', preview: 'How to identify and treat mosaic disease' },
-    { id: '2', title: 'Brown Spot Disease', date: 'Yesterday, 11:15 AM', preview: 'Treatment for brown spot disease' },
-    { id: '3', title: 'Harvesting Tips', date: 'Jan 12, 2024', preview: 'Best practices for harvesting root crops' },
-    { id: '4', title: 'Fertilizer Guide', date: 'Jan 10, 2024', preview: 'Optimal fertilizer application for root crops' },
-    { id: '5', title: 'Root Crop Pest Control', date: 'Jan 8, 2024', preview: 'Managing root crop pests naturally' },
-    { id: '6', title: 'Soil Preparation', date: 'Jan 5, 2024', preview: 'How to prepare soil for root crop planting' },
+    { id: '2', text: 'How do I treat cassava mosaic disease?', icon: 'medical-outline' },
+    { id: '3', text: 'When is the right time to harvest cassava?', icon: 'calendar-outline' },
+    { id: '4', text: 'What type of fertilizer is best for cassava?', icon: 'flower-outline' },
   ]);
   const [showSuggestions, setShowSuggestions] = useState(true);
   const [showHistory, setShowHistory] = useState(false);
   const [showAttachmentMenu, setShowAttachmentMenu] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [isInputFocused, setIsInputFocused] = useState(false);
+  const [isSending, setIsSending] = useState(false);
 
   const slideAnim = useRef(new Animated.Value(-SIDEBAR_WIDTH)).current;
   const inputRef = useRef(null);
   const flatListRef = useRef(null);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
+
+  // Animated dots for typing indicator
+  const dot1 = useRef(new Animated.Value(0.3)).current;
+  const dot2 = useRef(new Animated.Value(0.3)).current;
+  const dot3 = useRef(new Animated.Value(0.3)).current;
 
   useFocusEffect(
     React.useCallback(() => {
@@ -92,6 +96,24 @@ const ChatbotScreen = ({ navigation }) => {
     };
   }, []);
 
+  // Typing indicator animation
+  useEffect(() => {
+    if (!isSending) return;
+    const animate = (dot, delay) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(dot, { toValue: 1, duration: 400, useNativeDriver: true }),
+          Animated.timing(dot, { toValue: 0.3, duration: 400, useNativeDriver: true }),
+        ])
+      );
+    const a1 = animate(dot1, 0);
+    const a2 = animate(dot2, 150);
+    const a3 = animate(dot3, 300);
+    a1.start(); a2.start(); a3.start();
+    return () => { a1.stop(); a2.stop(); a3.stop(); };
+  }, [isSending, dot1, dot2, dot3]);
+
   const openHistory = () => {
     setShowHistory(true);
     Animated.timing(slideAnim, { toValue: 0, duration: 280, useNativeDriver: true }).start();
@@ -101,33 +123,70 @@ const ChatbotScreen = ({ navigation }) => {
     Animated.timing(slideAnim, { toValue: -SIDEBAR_WIDTH, duration: 240, useNativeDriver: true }).start(() => setShowHistory(false));
   };
 
-  const sendMessage = (text) => {
-    if (!text || !text.trim()) return;
-    const userMessage = { id: Date.now().toString(), text: text.trim(), sender: 'user' };
+  // ---------- SEND MESSAGE (the real deal) ----------
+  const sendMessage = async (text) => {
+    if (isSending) return;
+    if (!text || !text.trim()) {
+      // Allow sending an image with no text
+      if (attachments.length === 0) return;
+    }
+
+    const trimmed = text.trim();
+    const hasImage = attachments.length > 0;
+    const imageUri = hasImage ? attachments[0].uri : null;
+
+    const userMessage = {
+      id: Date.now().toString(),
+      text: trimmed || (hasImage ? '📷 Sent a crop photo' : ''),
+      sender: 'user',
+      image: imageUri || null,
+    };
+
+    // Snapshot history BEFORE adding the user message
+    const conversationSnapshot = messages
+      .filter((m) => m.id !== 'init')
+      .map((m) => ({ sender: m.sender, text: m.text }));
+
     setMessages((prev) => [...prev, userMessage]);
     setInputText('');
+    setAttachments([]);
     setShowSuggestions(false);
     Keyboard.dismiss();
-    setTimeout(() => {
-      const botResponse = {
-        id: (Date.now() + 1).toString(),
-        text: getBotResponse(text),
-        sender: 'bot',
-      };
-      setMessages((prev) => [...prev, botResponse]);
-    }, 1000);
-  };
+    setIsSending(true);
 
-  const getBotResponse = (userInput) => {
-    const lowerInput = userInput.toLowerCase();
-    if (lowerInput.includes('mosaic')) return 'Cassava Mosaic Disease is caused by a virus spread by whiteflies. Remove infected plants immediately, plant resistant varieties, and control whitefly populations. Always use disease-free planting materials.';
-    if (lowerInput.includes('brown') || lowerInput.includes('spot')) return 'Brown Spot Disease is caused by the fungus Cercospora henningsii. Apply copper-based fungicides, ensure proper drainage, practice crop rotation, and remove infected leaves.';
-    if (lowerInput.includes('harvest')) return 'Most root crops are harvested 8-12 months after planting depending on the variety. Harvest when leaves start to yellow and fall off, and the stems become woody.';
-    if (lowerInput.includes('fertilizer') || lowerInput.includes('fertilize')) return 'Root crops respond well to balanced fertilization. Apply 60-90 kg N/ha, 20-30 kg P/ha, and 60-90 kg K/ha. Use organic compost or manure for better soil structure.';
-    if (lowerInput.includes('soil') || lowerInput.includes('prepare')) return 'Root crops grow best in well-drained, sandy loam soils with pH 5.5-6.5. Prepare soil by deep plowing (25-30 cm), remove weeds, and incorporate organic matter.';
-    if (lowerInput.includes('pest') || lowerInput.includes('insect')) return 'Common root crop pests include mealybugs, whiteflies, and green mites. Control through biological methods, resistant varieties, and proper field sanitation.';
-    if (lowerInput.includes('variety') || lowerInput.includes('plant')) return 'There are many root crop varieties to choose from - cassava, sweet potato, taro, and yam among them. Choose based on your purpose and soil conditions.';
-    return 'I understand your question about root crop farming. For specific advice, I recommend consulting with your local agricultural extension officer.';
+    try {
+      let result;
+      if (imageUri) {
+        result = await sendChatWithImage(conversationSnapshot, trimmed, imageUri);
+      } else {
+        result = await sendChatMessage(conversationSnapshot, trimmed);
+      }
+
+      const botMessage = {
+        id: (Date.now() + 1).toString(),
+        text: result.text,
+        sender: 'bot',
+        isError: !result.success,
+      };
+      setMessages((prev) => [...prev, botMessage]);
+      Haptics.notificationAsync(
+        result.success
+          ? Haptics.NotificationFeedbackType.Success
+          : Haptics.NotificationFeedbackType.Error
+      );
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: (Date.now() + 1).toString(),
+          text: 'Sorry, something went wrong. Please try again.',
+          sender: 'bot',
+          isError: true,
+        },
+      ]);
+    } finally {
+      setIsSending(false);
+    }
   };
 
   const handleTopicPress = (topic) => {
@@ -137,8 +196,9 @@ const ChatbotScreen = ({ navigation }) => {
 
   const handleNewChat = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setMessages([{ id: '1', text: 'Hello! How can I help you with your root crop farming today?', sender: 'bot' }]);
+    setMessages([INITIAL_MESSAGE]);
     setShowSuggestions(true);
+    setAttachments([]);
     Keyboard.dismiss();
   };
 
@@ -151,12 +211,12 @@ const ChatbotScreen = ({ navigation }) => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
-      quality: 1,
+      quality: 0.8,
     });
     if (!result.canceled) {
       setAttachments([...attachments, { id: Date.now().toString(), uri: result.assets[0].uri, type: 'image' }]);
       setShowAttachmentMenu(false);
-      Alert.alert('OK Uploaded', 'Crop image attached successfully!');
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
   };
 
@@ -166,31 +226,35 @@ const ChatbotScreen = ({ navigation }) => {
       Alert.alert('Permission needed', 'Please grant camera permissions.');
       return;
     }
-    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 1 });
+    const result = await ImagePicker.launchCameraAsync({ allowsEditing: true, quality: 0.8 });
     if (!result.canceled) {
       setAttachments([...attachments, { id: Date.now().toString(), uri: result.assets[0].uri, type: 'image' }]);
       setShowAttachmentMenu(false);
-      Alert.alert('OK Captured', 'Crop photo captured successfully!');
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
   };
 
-  const removeAttachment = (id) => setAttachments(attachments.filter(att => att.id !== id));
+  const removeAttachment = (id) => setAttachments(attachments.filter((att) => att.id !== id));
 
+  // ---------- RENDERERS ----------
   const renderMessage = ({ item }) => (
     <View
       style={[
         styles.messageContainer,
         item.sender === 'user'
           ? [styles.userMessage, { backgroundColor: themeColors.primary }]
-          : [styles.botMessage, { backgroundColor: themeColors.surface }],
+          : [styles.botMessage, { backgroundColor: item.isError ? themeColors.error + '22' : themeColors.surface }],
       ]}
     >
+      {item.image && (
+        <Image source={{ uri: item.image }} style={styles.messageImage} resizeMode="cover" />
+      )}
       <Text
         style={[
           styles.messageText,
           item.sender === 'user'
             ? [styles.userText, { color: themeColors['on-primary'] }]
-            : [styles.botText, { color: themeColors.text }],
+            : [styles.botText, { color: item.isError ? themeColors.error : themeColors.text }],
         ]}
       >
         {item.text}
@@ -198,11 +262,23 @@ const ChatbotScreen = ({ navigation }) => {
     </View>
   );
 
+  const renderTypingIndicator = () => {
+    if (!isSending) return null;
+    return (
+      <View style={[styles.messageContainer, styles.botMessage, { backgroundColor: themeColors.surface, flexDirection: 'row', alignItems: 'center', gap: 4 }]}>
+        <Animated.View style={[styles.typingDot, { backgroundColor: themeColors.textSecondary, opacity: dot1 }]} />
+        <Animated.View style={[styles.typingDot, { backgroundColor: themeColors.textSecondary, opacity: dot2 }]} />
+        <Animated.View style={[styles.typingDot, { backgroundColor: themeColors.textSecondary, opacity: dot3 }]} />
+      </View>
+    );
+  };
+
   const renderSuggestedTopic = ({ item }) => (
     <TouchableOpacity
       style={[styles.topicItem, { backgroundColor: themeColors.card }]}
       onPress={() => handleTopicPress(item)}
       activeOpacity={0.7}
+      disabled={isSending}
     >
       <Ionicons name={item.icon} size={20} color={themeColors.text} />
       <Text style={[styles.topicText, { color: themeColors.text }]}>{item.text}</Text>
@@ -260,10 +336,11 @@ const ChatbotScreen = ({ navigation }) => {
           contentContainerStyle={styles.messagesList}
           showsVerticalScrollIndicator={false}
           onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+          ListFooterComponent={renderTypingIndicator}
           ListHeaderComponent={
             showSuggestions && messages.length === 1 ? (
               <View style={[styles.suggestionsContainer, { backgroundColor: themeColors.surface }]}>
-                <Text style={[styles.suggestionsHeader, { color: themeColors.text }]}>Frequently Asked Questions</Text>
+                <Text style={[styles.suggestionsHeader, { color: themeColors.text }]}>Try asking</Text>
                 <FlatList
                   data={suggestedTopics}
                   renderItem={renderSuggestedTopic}
@@ -294,8 +371,8 @@ const ChatbotScreen = ({ navigation }) => {
           borderTopColor: themeColors.border,
           marginBottom: keyboardHeight > 0 ? keyboardHeight : 16,
         }]}>
-          <TouchableOpacity style={styles.attachButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowAttachmentMenu(!showAttachmentMenu); }}>
-            <Ionicons name="attach-outline" size={24} color={themeColors.textSecondary} />
+          <TouchableOpacity style={styles.attachButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowAttachmentMenu(!showAttachmentMenu); }} disabled={isSending}>
+            <Ionicons name="attach-outline" size={24} color={isSending ? themeColors.border : themeColors.textSecondary} />
           </TouchableOpacity>
 
           <TextInput
@@ -314,16 +391,21 @@ const ChatbotScreen = ({ navigation }) => {
             onBlur={() => setIsInputFocused(false)}
             multiline
             returnKeyType="send"
+            editable={!isSending}
             onSubmitEditing={() => sendMessage(inputText)}
           />
 
           <TouchableOpacity
-            style={[styles.sendButton, { backgroundColor: themeColors.primary }, !inputText.trim() && styles.sendButtonDisabled]}
+            style={[styles.sendButton, { backgroundColor: themeColors.primary }, (isSending || (!inputText.trim() && attachments.length === 0)) && styles.sendButtonDisabled]}
             onPress={() => sendMessage(inputText)}
             activeOpacity={0.85}
-            disabled={!inputText.trim()}
+            disabled={isSending || (!inputText.trim() && attachments.length === 0)}
           >
-            <Ionicons name="send" size={18} color={themeColors['on-primary']} />
+            {isSending ? (
+              <ActivityIndicator size="small" color={themeColors['on-primary']} />
+            ) : (
+              <Ionicons name="send" size={18} color={themeColors['on-primary']} />
+            )}
           </TouchableOpacity>
         </View>
 
@@ -358,14 +440,17 @@ const ChatbotScreen = ({ navigation }) => {
               </TouchableOpacity>
             </View>
             <FlatList
-              data={conversationHistory}
+              data={[]}
               renderItem={renderHistoryItem}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.historyList}
               ListEmptyComponent={
                 <View style={styles.historyEmpty}>
                   <Ionicons name="leaf-outline" size={48} color={themeColors.primary} />
-                  <Text style={[styles.historyEmptyText, { color: themeColors.textSecondary }]}>No conversations yet</Text>
+                  <Text style={[styles.historyEmptyText, { color: themeColors.textSecondary }]}>No saved conversations yet</Text>
+                  <Text style={[styles.historyEmptySubtext, { color: themeColors.textSecondary }]}>
+                    Chat history will appear here soon
+                  </Text>
                 </View>
               }
             />
@@ -396,8 +481,10 @@ const styles = StyleSheet.create({
   userMessage: { alignSelf: 'flex-end' },
   botMessage: { alignSelf: 'flex-start' },
   messageText: { fontSize: 14, lineHeight: 20 },
+  messageImage: { width: 200, height: 200, borderRadius: 12, marginBottom: 8 },
   userText: {},
   botText: {},
+  typingDot: { width: 8, height: 8, borderRadius: 4, marginHorizontal: 2 },
   suggestionsContainer: { borderRadius: 16, padding: 16, marginBottom: 16 },
   suggestionsHeader: { fontSize: 16, fontWeight: '600', marginBottom: 12 },
   suggestionsList: { gap: 4 },
@@ -422,7 +509,7 @@ const styles = StyleSheet.create({
   historySidebar: { width: SIDEBAR_WIDTH, height: '100%', borderTopRightRadius: 24, borderBottomRightRadius: 24 },
   historyHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 48, borderBottomWidth: 1 },
   historyTitle: { fontSize: 20, fontWeight: '700' },
-  historyList: { padding: 16, paddingBottom: 80 },
+  historyList: { padding: 16, paddingBottom: 80, flexGrow: 1 },
   historyItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 8, borderBottomWidth: 1 },
   historyItemContent: { flex: 1, gap: 2 },
   historyItemTitle: { fontSize: 15, fontWeight: '600' },
@@ -431,7 +518,8 @@ const styles = StyleSheet.create({
   historyNewChat: { position: 'absolute', bottom: 30, left: 16, right: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', paddingVertical: 14, borderRadius: 999, gap: 8 },
   historyNewChatText: { fontSize: 16, fontWeight: '600' },
   historyEmpty: { alignItems: 'center', justifyContent: 'center', paddingVertical: 60, gap: 12 },
-  historyEmptyText: { fontSize: 16 },
+  historyEmptyText: { fontSize: 16, fontWeight: '600' },
+  historyEmptySubtext: { fontSize: 13, textAlign: 'center', paddingHorizontal: 20 },
 });
 
 export default ChatbotScreen;
