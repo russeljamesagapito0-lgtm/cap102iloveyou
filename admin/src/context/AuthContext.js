@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react';
-import { supabase } from '../lib/supabase';
+import { supabase, logAudit } from '../lib/supabase';
 
 const AuthContext = createContext();
 
@@ -48,18 +48,38 @@ export function AuthProvider({ children }) {
       throw new Error('This account is not an admin.');
     }
 
+    logAudit('login', 'admin', data.user.id, {
+      email: p.email,
+      at: new Date().toISOString(),
+    });
+
     setProfile(p);
     sessionStorage.removeItem(EXPIRED_FLAG);
     setExpiresAt(Date.now() + SESSION_MS);
   };
 
-  const signOut = () => supabase.auth.signOut();
+  const signOut = async () => {
+    if (profile) {
+      logAudit('logout', 'admin', profile.id, {
+        email: profile.email,
+        at: new Date().toISOString(),
+      });
+    }
+    await supabase.auth.signOut();
+  };
 
   useEffect(() => {
     if (!expiresAt) return;
 
     const check = () => {
       if (Date.now() >= expiresAt) {
+        if (profile) {
+          logAudit('logout', 'admin', profile.id, {
+            email: profile.email,
+            at: new Date().toISOString(),
+            reason: 'session_expired',
+          });
+        }
         sessionStorage.setItem(EXPIRED_FLAG, '1');
         supabase.auth.signOut();
       }
@@ -73,7 +93,7 @@ export function AuthProvider({ children }) {
       clearInterval(id);
       document.removeEventListener('visibilitychange', check);
     };
-  }, [expiresAt]);
+  }, [expiresAt, profile]);
 
   const value = {
     session,

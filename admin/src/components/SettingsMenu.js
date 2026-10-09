@@ -3,25 +3,11 @@ import { createPortal } from 'react-dom';
 import { useTheme } from '../context/ThemeContext';
 import { useAuth } from '../context/AuthContext';
 import { useConfirm } from './ConfirmDialog';
-import { useToast } from '../context/ToastContext';
-import { supabase, fmtDate } from '../lib/supabase';
-import { downloadCsv } from '../lib/csv';
 import Icon from './Icon';
 
 const MENU_WIDTH = 240;
-const MENU_HEIGHT = 220;
+const MENU_HEIGHT = 200;
 const VIEWPORT_PAD = 8;
-
-const buildDashboardRows = (data) => [
-  { metric: 'Exported at', value: fmtDate(new Date()) },
-  { metric: 'Total scans', value: data.totalScans ?? 0 },
-  { metric: 'Total users', value: data.totalUsers ?? 0 },
-  { metric: 'Active users (7d)', value: data.activeUsers7d ?? 0 },
-  { metric: 'Scans today', value: data.scansToday ?? 0 },
-  { metric: '', value: '' },
-  { metric: 'Day', value: 'Scans' },
-  ...(data.scansPerDay || []).map((d) => ({ metric: d.day, value: d.count })),
-];
 
 const computePosition = (rect, align) => {
   let top, left;
@@ -50,12 +36,10 @@ export default function SettingsMenu({ align = 'down' }) {
   const { isDarkMode, toggleDarkMode } = useTheme();
   const { profile, signOut } = useAuth();
   const [open, setOpen] = useState(false);
-  const [exporting, setExporting] = useState(false);
   const [pos, setPos] = useState({ top: 0, left: 0 });
   const btnRef = useRef(null);
   const menuRef = useRef(null);
   const confirm = useConfirm();
-  const toast = useToast();
 
   useEffect(() => {
     if (!open || !btnRef.current) return;
@@ -94,23 +78,6 @@ export default function SettingsMenu({ align = 'down' }) {
     });
     if (!ok) return;
     await signOut();
-  };
-
-  const handleExport = async () => {
-    setOpen(false);
-    setExporting(true);
-    try {
-      const { data, error } = await supabase.rpc('admin_dashboard');
-      if (error) throw error;
-
-      const date = new Date().toISOString().slice(0, 10);
-      downloadCsv(`rootcare-dashboard-${date}.csv`, buildDashboardRows(data));
-      toast.success('Report downloaded', { description: `rootcare-dashboard-${date}.csv` });
-    } catch (e) {
-      toast.error('Export failed: ' + (e?.message || e));
-    } finally {
-      setExporting(false);
-    }
   };
 
   return (
@@ -153,17 +120,6 @@ export default function SettingsMenu({ align = 'down' }) {
               <span className={'toggle-pill' + (isDarkMode ? ' on' : '')}>
                 <span className="toggle-dot" />
               </span>
-            </button>
-
-            <button
-              type="button"
-              className="settings-menu-item"
-              onClick={handleExport}
-              disabled={exporting}
-              role="menuitem"
-            >
-              <Icon name="download" size={16} />
-              <span>{exporting ? 'Exporting…' : 'Export report'}</span>
             </button>
 
             <div className="settings-menu-sep" />

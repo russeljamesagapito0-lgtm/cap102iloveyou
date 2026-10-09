@@ -170,7 +170,7 @@ const styles = StyleSheet.create({
   splashContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 20 },
   splashContent: { alignItems: 'center', justifyContent: 'center', zIndex: 1 },
   splashLogoWrapper: { marginBottom: 16 },
-  splashLogo: { width: 350, height: 350 },
+  splashLogo: { width: 200, height: 200 },
   splashTextContainer: { alignItems: 'center', marginBottom: 32 },
   splashTitle: { fontSize: 40, fontWeight: '700', marginBottom: 8, letterSpacing: -0.5 },
   splashSubtitle: { fontSize: 14, fontWeight: '400', textAlign: 'center' },

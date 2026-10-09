@@ -621,7 +621,11 @@ select.input { cursor: pointer; }
   padding: 32px;
   border-radius: 14px;
   border: 1px solid var(--border);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
+}
+
+[data-theme="light"] .login-card {
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.15);
 }
 
 .login-brand {
@@ -950,6 +954,7 @@ select.input { cursor: pointer; }
   font-weight: 700;
   color: var(--text);
 }
+
 .toast-stack {
   position: fixed;
   top: 20px;
@@ -1026,4 +1031,7 @@ select.input { cursor: pointer; }
 .toast-info .toast-icon {
   background: var(--info-bg);
   color: var(--info-text);
+}
+.modal-footer .btn-outline:first-child {
+  margin-right: auto;
 }
