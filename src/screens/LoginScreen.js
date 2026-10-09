@@ -1,7 +1,7 @@
 // screens/LoginScreen.js
 import React, { useState } from 'react';
 import {
-  View, Text, TextInput, TouchableOpacity, StyleSheet, Platform,
+  View, Text, TextInput, TouchableOpacity, StyleSheet, Platform,  
   KeyboardAvoidingView, ScrollView, ActivityIndicator, Image, Modal,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -328,4 +328,4 @@ const styles = StyleSheet.create({
   modalCancelButtonText: { fontSize: 15, fontWeight: '600', fontFamily: 'OpenSans_600SemiBold' },
 });
 
-export default LoginScreen;
+export default LoginScreen; 

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Badge from '../components/Badge';
 import Modal from '../components/Modal';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -8,7 +8,8 @@ import { supabase, fmtDate, logAudit } from '../lib/supabase';
 
 const PAGE_SIZE = 1000;
 const LOW_CONFIDENCE = 0.7;
-const MAX_SCANS = 200;
+// Per-user scan counts are computed from this list, so it must cover all users.
+const MAX_SCANS = 1000;
 const SCAN_SELECT = '*, profiles(full_name,email)';
 
 const confidenceClass = (c) => {
@@ -31,12 +32,14 @@ const exportRow = (s) => ({
 });
 
 // Shared by the initial fetch and the realtime handlers so the shape stays identical.
-const mapScan = (s, names) => ({
+const buildScanObject = (s, names) => ({
   id: s.id,
+  userId: s.user_id,
   code: s.disease_code,
   predicted: s.predicted_code,
   disease: names[s.disease_code] || s.disease_code || 'Unknown',
   user: s.profiles?.full_name || s.profiles?.email || 'Unknown',
+  email: s.profiles?.email || '',
   confidence: Number(s.confidence ?? 0),
   date: fmtDate(s.created_at),
   region: s.region || '-',
@@ -45,9 +48,14 @@ const mapScan = (s, names) => ({
   corrected: s.corrected,
 });
 
+const displayName = (p) => p.full_name || p.email || 'Unnamed';
+
 export default function Scans() {
   const [scans, setScans] = useState([]);
+  const [profiles, setProfiles] = useState([]);
   const [diseases, setDiseases] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [selectedUser, setSelectedUser] = useState(null);
   const [filter, setFilter] = useState('all');
   const [selected, setSelected] = useState(null);
   const [newLabel, setNewLabel] = useState('');
@@ -58,9 +66,9 @@ export default function Scans() {
     let cancelled = false;
     let names = {};
 
-    // Resolves once the disease names are loaded, so realtime events
-    // that arrive early can wait for it instead of showing raw codes.
-    const namesReady = (async () => {
+    // Resolves once diseases + profiles are loaded, so realtime events
+    // that arrive early wait for it instead of showing raw codes.
+    const lookupsReady = (async () => {
       const { data: d } = await supabase
         .from('diseases')
         .select('code,name')
@@ -68,6 +76,13 @@ export default function Scans() {
 
       names = Object.fromEntries((d || []).map((x) => [x.code, x.name]));
       if (!cancelled) setDiseases(d || []);
+
+      const { data: p } = await supabase
+        .from('profiles')
+        .select('id, full_name, email')
+        .order('full_name', { ascending: true, nullsFirst: false });
+
+      if (!cancelled) setProfiles(p || []);
     })();
 
     // Subscribe first, then fetch, so nothing inserted in between is missed.
@@ -77,7 +92,7 @@ export default function Scans() {
         'postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'scans' },
         async (payload) => {
-          await namesReady;
+          await lookupsReady;
 
           // Realtime payloads have no join, so refetch this one row with profiles.
           const { data } = await supabase
@@ -90,7 +105,7 @@ export default function Scans() {
 
           setScans((prev) => {
             if (prev.some((x) => x.id === data.id)) return prev; // already have it
-            return [mapScan(data, names), ...prev].slice(0, MAX_SCANS);
+            return [buildScanObject(data, names), ...prev].slice(0, MAX_SCANS);
           });
         }
       )
@@ -98,7 +113,7 @@ export default function Scans() {
         'postgres_changes',
         { event: 'UPDATE', schema: 'public', table: 'scans' },
         async (payload) => {
-          await namesReady;
+          await lookupsReady;
           const s = payload.new;
           if (cancelled) return;
 
@@ -106,7 +121,7 @@ export default function Scans() {
             prev.map((x) =>
               x.id === s.id
                 ? {
-                    ...x, // keeps `user` and `date`, which the payload can't rebuild
+                    ...x, // keeps `user`, `email`, `userId` and `date`, which the payload can't rebuild
                     code: s.disease_code,
                     predicted: s.predicted_code,
                     disease: names[s.disease_code] || s.disease_code || 'Unknown',
@@ -135,7 +150,7 @@ export default function Scans() {
 
     // Initial load
     (async () => {
-      await namesReady;
+      await lookupsReady;
 
       const { data } = await supabase
         .from('scans')
@@ -146,11 +161,12 @@ export default function Scans() {
       if (cancelled) return;
 
       setScans((prev) => {
-        const fetched = (data || []).map((s) => mapScan(s, names));
+        const fetched = (data || []).map((s) => buildScanObject(s, names));
         // Keep anything realtime delivered during the fetch that isn't in the result.
         const extra = prev.filter((p) => !fetched.some((f) => f.id === p.id));
         return [...extra, ...fetched].slice(0, MAX_SCANS);
       });
+      setLoading(false);
     })();
 
     return () => {
@@ -159,13 +175,57 @@ export default function Scans() {
     };
   }, []);
 
-  const filtered = scans.filter((s) => {
-    if (filter === 'flagged') return s.flagged;
-    if (filter === 'low') return s.confidence < LOW_CONFIDENCE;
-    return true;
-  });
+  const users = useMemo(() => {
+    const statsById = new Map();
 
-  const flaggedCount = scans.filter((s) => s.flagged).length;
+    for (const s of scans) {
+      const key = s.userId || 'unknown';
+      if (!statsById.has(key)) {
+        statsById.set(key, { scans: 0, flagged: 0 });
+      }
+      const stats = statsById.get(key);
+      stats.scans += 1;
+      if (s.flagged) stats.flagged += 1;
+    }
+
+    return profiles
+      .map((p) => {
+        const stats = statsById.get(p.id) || { scans: 0, flagged: 0 };
+        return {
+          id: p.id,
+          name: displayName(p),
+          email: p.email || '',
+          scans: stats.scans,
+          flagged: stats.flagged,
+        };
+      })
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [profiles, scans]);
+
+  const userScans = useMemo(() => {
+    if (!selectedUser) return [];
+    return scans.filter((s) => s.userId === selectedUser.id);
+  }, [scans, selectedUser]);
+
+  const filtered = useMemo(() => {
+    return userScans.filter((s) => {
+      if (filter === 'flagged') return s.flagged;
+      if (filter === 'low') return s.confidence < LOW_CONFIDENCE;
+      return true;
+    });
+  }, [userScans, filter]);
+
+  const flaggedInView = userScans.filter((s) => s.flagged).length;
+
+  const openUser = (u) => {
+    setSelectedUser(u);
+    setFilter('all');
+  };
+
+  const backToUsers = () => {
+    setSelectedUser(null);
+    setFilter('all');
+  };
 
   const openModal = (s) => {
     setSelected(s);
@@ -237,6 +297,7 @@ export default function Scans() {
         .order('created_at', { ascending: false })
         .range(from, from + PAGE_SIZE - 1);
 
+      if (selectedUser?.id) q = q.eq('user_id', selectedUser.id);
       if (onlyCorrected) q = q.eq('corrected', true);
 
       const { data, error } = await q;
@@ -254,20 +315,86 @@ export default function Scans() {
       return;
     }
 
+    const scope = selectedUser ? `_${selectedUser.name.replace(/\s+/g, '_')}` : '';
     const suffix = onlyCorrected ? '_corrected' : '';
     const date = new Date().toISOString().slice(0, 10);
-    downloadCsv(`scans${suffix}_${date}.csv`, rows.map(exportRow));
-    toast.success('Export downloaded', {
-      description: `${rows.length} rows`,
-    });
+    downloadCsv(`scans${scope}${suffix}_${date}.csv`, rows.map(exportRow));
+    toast.success('Export downloaded', { description: `${rows.length} rows` });
   };
+
+  if (loading) {
+    return (
+      <div className="stack-lg">
+        <p className="page-subtitle">Loading scans…</p>
+      </div>
+    );
+  }
+
+  if (!selectedUser) {
+    return (
+      <div className="stack-lg">
+        <div className="flex-between">
+          <p className="page-subtitle">
+            {users.length} users · {scans.length} total scans
+          </p>
+        </div>
+
+        <div className="table-wrapper">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th className="text-right">Scans</th>
+                <th className="text-right">Flagged</th>
+                <th className="text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {users.map((u) => (
+                <tr key={u.id}>
+                  <td className="cell-strong">{u.name}</td>
+                  <td className="cell-muted">{u.email || '-'}</td>
+                  <td className="text-right">{u.scans}</td>
+                  <td className="text-right">
+                    {u.flagged > 0 ? (
+                      <span className="status-suspended">{u.flagged}</span>
+                    ) : (
+                      <span className="cell-muted">0</span>
+                    )}
+                  </td>
+                  <td className="text-right">
+                    <button className="link-btn" onClick={() => openUser(u)}>
+                      View scans
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {users.length === 0 && (
+                <tr>
+                  <td colSpan="5" className="text-center text-muted">
+                    No users registered yet.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="stack-lg">
       <div className="flex-between">
-        <p className="page-subtitle">
-          {scans.length} scans · {flaggedCount} flagged for review
-        </p>
+        <div>
+          <button className="link-btn" onClick={backToUsers}>
+            ← Back to users
+          </button>
+          <p className="page-subtitle" style={{ marginTop: 8 }}>
+            {selectedUser.name} · {userScans.length} scans · {flaggedInView} flagged
+          </p>
+        </div>
 
         <div className="filter-bar">
           {['all', 'flagged', 'low'].map((f) => (
@@ -288,39 +415,44 @@ export default function Scans() {
         </div>
       </div>
 
-      <div className="scan-grid">
-        {filtered.map((s) => (
-          <div key={s.id} className="scan-card">
-            <div className="scan-thumb">
-              {s.image_url ? (
-                <img src={s.image_url} alt="" className="scan-img" />
-              ) : (
-                s.disease
-              )}
-            </div>
-            <div className="scan-body">
-              <div className="scan-title-row">
-                <span className="scan-title">{s.disease}</span>
-                {s.flagged && <Badge color="red">flagged</Badge>}
-                {s.corrected && <Badge color="blue">corrected</Badge>}
+      {userScans.length === 0 ? (
+        <div className="scan-empty">
+          This user has not submitted any scans yet.
+        </div>
+      ) : (
+        <div className="scan-grid">
+          {filtered.map((s) => (
+            <div key={s.id} className="scan-card">
+              <div className="scan-thumb">
+                {s.image_url ? (
+                  <img src={s.image_url} alt="" className="scan-img" />
+                ) : (
+                  s.disease
+                )}
               </div>
-              <p className="scan-meta">by {s.user}</p>
-              <p className="scan-date">{s.date}</p>
-              <div className="scan-footer">
-                <span className={confidenceClass(s.confidence)}>
-                  {(s.confidence * 100).toFixed(0)}% confidence
-                </span>
-                <button className="link-btn" onClick={() => openModal(s)}>
-                  Review
-                </button>
+              <div className="scan-body">
+                <div className="scan-title-row">
+                  <span className="scan-title">{s.disease}</span>
+                  {s.flagged && <Badge color="red">flagged</Badge>}
+                  {s.corrected && <Badge color="blue">corrected</Badge>}
+                </div>
+                <p className="scan-date">{s.date}</p>
+                <div className="scan-footer">
+                  <span className={confidenceClass(s.confidence)}>
+                    {(s.confidence * 100).toFixed(0)}% confidence
+                  </span>
+                  <button className="link-btn" onClick={() => openModal(s)}>
+                    Review
+                  </button>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
-        {filtered.length === 0 && (
-          <div className="scan-empty">No scans match this filter.</div>
-        )}
-      </div>
+          ))}
+          {filtered.length === 0 && (
+            <div className="scan-empty">No scans match this filter.</div>
+          )}
+        </div>
+      )}
 
       <Modal
         open={!!selected}

@@ -1,9 +1,11 @@
+// utils/offlineInference.js
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Skia, ColorType, AlphaType } from '@shopify/react-native-skia';
 import { loadTensorflowModel } from 'react-native-fast-tflite';
 
+// ---- Config ----
 const IMAGE_SIZE = 384;
 const CONFIDENCE_THRESHOLD = 0.65;
 const GREEN_RATIO_THRESHOLD = 0.15;
@@ -16,7 +18,8 @@ const WEIGHTS = {
   edges: 1.0,
   quality: 0.5,
 };
-const MAX_SCORE = WEIGHTS.green + WEIGHTS.confidence + WEIGHTS.entropy + WEIGHTS.edges + WEIGHTS.quality;
+const MAX_SCORE =
+  WEIGHTS.green + WEIGHTS.confidence + WEIGHTS.entropy + WEIGHTS.edges + WEIGHTS.quality;
 
 const EDGE_PARTIAL_CREDIT = 0.5;
 const QUALITY_PARTIAL_CREDIT = 0.3;
@@ -33,6 +36,7 @@ const CLASS_NAMES = [
   'Healthy',
 ];
 
+// ---- Model file ----
 const MODEL_FILENAME = 'rootcare_cassava_convnext_384.tflite';
 const OLD_MODEL_FILENAME = 'rootcare_cassava_model_resnet50v2.tflite';
 const LOCAL_MODEL_PATH = FileSystem.documentDirectory + MODEL_FILENAME;
@@ -40,6 +44,7 @@ const LOCAL_MODEL_PATH = FileSystem.documentDirectory + MODEL_FILENAME;
 let _model = null;
 let _loading = null;
 
+// ---- Load / cache the TFLite model ----
 export const loadOfflineModel = async () => {
   if (_model) return _model;
   if (_loading) return _loading;
@@ -61,7 +66,7 @@ export const loadOfflineModel = async () => {
         if (!asset.localUri) throw new Error('Asset did not resolve to a local URI');
 
         // Copy to a temp name, then rename, so a killed app mid-copy
-        // can't leave a half-written 107 MB file that looks "cached"
+        // can't leave a half-written file that looks "cached".
         const tmpPath = LOCAL_MODEL_PATH + '.tmp';
         await FileSystem.deleteAsync(tmpPath, { idempotent: true });
         await FileSystem.copyAsync({ from: asset.localUri, to: tmpPath });
@@ -84,8 +89,9 @@ export const loadOfflineModel = async () => {
   return _loading;
 };
 
+// ---- Native image decode via Skia ----
 const decodeImageNative = async (uri) => {
-  const data = await Skia.Data.fromURI(uri);   
+  const data = await Skia.Data.fromURI(uri);
   const image = Skia.Image.MakeImageFromEncoded(data);
   if (!image) throw new Error('Skia failed to decode image');
 
@@ -103,19 +109,21 @@ const decodeImageNative = async (uri) => {
   data.dispose();
 
   if (!pixels) throw new Error('Skia readPixels returned null');
-  return { data: pixels, width, height }; 
+  return { data: pixels, width, height };
 };
 
+// ---- Input tensor: RGBA → RGB float (raw 0-255, model does its own preprocessing) ----
 const buildInputTensor = (rgba) => {
   const out = new Float32Array(IMAGE_SIZE * IMAGE_SIZE * 3);
   for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
-    out[j]     = rgba[i];       // raw 0-255, matches the model's built-in preprocessing
+    out[j] = rgba[i];
     out[j + 1] = rgba[i + 1];
     out[j + 2] = rgba[i + 2];
   }
   return out;
 };
 
+// ---- Quality heuristics ----
 const computeGreenRatio = (rgba) => {
   let green = 0;
   const total = rgba.length / 4;
@@ -149,7 +157,7 @@ const computeEdgeDensity = (rgba, w, h) => {
       const p = y * w + x;
       let v;
       if (x === 0 || y === 0 || x === w - 1 || y === h - 1) {
-        v = gray[p]; 
+        v = gray[p];
       } else {
         v =
           -gray[p - w - 1] - gray[p - w] - gray[p - w + 1] +
@@ -167,7 +175,7 @@ const computeBrightnessContrast = (rgba, w, h) => {
   let sum = 0, sumSq = 0;
   const n = w * h;
   for (let i = 0; i < rgba.length; i += 4) {
-    const r = rgba[i]; 
+    const r = rgba[i];
     sum += r;
     sumSq += r * r;
   }
@@ -177,40 +185,55 @@ const computeBrightnessContrast = (rgba, w, h) => {
   return { brightness: mean, contrast: stddev };
 };
 
+// ---- Normalize raw model output into a plain array ----
+const normalizeOutput = (raw) => {
+  if (!raw) return [];
+  if (raw instanceof Float32Array) return Array.from(raw);
+  if (raw instanceof ArrayBuffer) return Array.from(new Float32Array(raw));
+  if (Array.isArray(raw)) return raw;
+  try {
+    return Array.from(raw);
+  } catch {
+    return [];
+  }
+};
+
+// ---- Main inference entry point ----
 export const runOfflineInference = async (imageUri) => {
   const model = await loadOfflineModel();
 
   const manipulated = await ImageManipulator.manipulateAsync(
-  imageUri,
-  [{ resize: { width: IMAGE_SIZE, height: IMAGE_SIZE } }],
-  { format: ImageManipulator.SaveFormat.JPEG, compress: 0.9 }
-);
+    imageUri,
+    [{ resize: { width: IMAGE_SIZE, height: IMAGE_SIZE } }],
+    { format: ImageManipulator.SaveFormat.JPEG, compress: 0.9 }
+  );
 
   const { data: rgba, width, height } = await decodeImageNative(manipulated.uri);
 
   if (width !== IMAGE_SIZE || height !== IMAGE_SIZE) {
-    console.warn(` Manipulated image is ${width}x${height}, expected ${IMAGE_SIZE}x${IMAGE_SIZE}`);
+    console.warn(`Manipulated image is ${width}x${height}, expected ${IMAGE_SIZE}x${IMAGE_SIZE}`);
   }
 
   const input = buildInputTensor(rgba);
   const inputArrayBuffer = new ArrayBuffer(input.length * 4);
   const inputView = new Float32Array(inputArrayBuffer);
   inputView.set(input);
-  const rawOutputs = await model.run([inputArrayBuffer]);
 
-  let probs;
-  if (rawOutputs[0] instanceof Float32Array) {
-    probs = Array.from(rawOutputs[0]);
-  } else if (rawOutputs[0] instanceof ArrayBuffer) {
-    probs = Array.from(new Float32Array(rawOutputs[0]));
-  } else if (Array.isArray(rawOutputs[0])) {
-    probs = rawOutputs[0];
-  } else {
-    probs = Array.from(rawOutputs[0] || []);
+  const rawOutputs = await model.run([inputArrayBuffer]);
+  const probs = normalizeOutput(rawOutputs?.[0]);
+
+  if (!probs.length) {
+    return {
+      success: false,
+      error: 'empty_output',
+      message: 'The model did not return a prediction. Please try another photo.',
+      _offline: true,
+    };
   }
 
   const predictedIndex = probs.indexOf(Math.max(...probs));
-  const confidence = probs[predictedIndex];
+  const confidence = probs[predictedIndex] ?? 0;
+
   const greenRatio = computeGreenRatio(rgba);
   const entropy = computeEntropy(probs);
   const edgeDensity = computeEdgeDensity(rgba, width, height);
@@ -250,14 +273,15 @@ export const runOfflineInference = async (imageUri) => {
     green_ratio: parseFloat((greenRatio * 100).toFixed(2)),
   };
 
-  console.log(' Inference probs:', allProbabilities);
-  console.log(' Detection metrics:', detectionMetrics);
+  console.log('Inference probs:', allProbabilities);
+  console.log('Detection metrics:', detectionMetrics);
 
   if (!isCassava || !Number.isFinite(confidence)) {
     return {
       success: false,
       error: 'not_cassava',
-      message: 'This does not appear to be a cassava leaf. Please upload a clear image of a cassava leaf.',
+      message:
+        'This does not appear to be a cassava leaf. Please upload a clear image of a cassava leaf.',
       detection_metrics: detectionMetrics,
       confidence: parseFloat(((confidence || 0) * 100).toFixed(2)),
       allProbabilities,

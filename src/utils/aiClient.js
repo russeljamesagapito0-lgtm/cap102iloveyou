@@ -1,5 +1,4 @@
 import { File } from 'expo-file-system';
-import Toast from 'react-native-toast-message';
 import { supabase } from './supabaseClient';
 
 const API_KEY = process.env.EXPO_PUBLIC_GEMINI_API_KEY;
@@ -124,35 +123,42 @@ const buildInput = (conversation, userContent, contextBlock) => {
 };
 
 const friendlyError = (error, fallback) => {
-  const msg = error?.message || '';
-  if (msg.includes('429') || msg.includes('rate')) {
-    return 'Too many requests right now. Please wait a moment and try again.';
+  const msg = (error?.message || '').toLowerCase();
+
+  if (
+    msg.includes('perday') ||
+    msg.includes('per_day') ||
+    msg.includes('daily') ||
+    (msg.includes('quota') && !msg.includes('perminute') && !msg.includes('per_minute'))
+  ) {
+    return "You've reached today's AI limit. Please try again tomorrow.";
   }
+
+  if (
+    msg.includes('429') ||
+    msg.includes('rate') ||
+    msg.includes('perminute') ||
+    msg.includes('per_minute')
+  ) {
+    return 'Too many requests right now. Please wait a minute and try again.';
+  }
+
   if (msg.includes('network') || msg.includes('fetch')) {
     return 'Could not reach the server. Check your internet connection.';
   }
+
   if (msg.includes('401') || msg.includes('403')) {
     return 'The AI service is temporarily unavailable. Try again later.';
   }
-  return fallback;
-};
 
-const showAIToast = (title, message) => {
-  Toast.show({
-    type: 'error',
-    text1: title,
-    text2: message,
-    visibilityTime: 3500,
-    position: 'top',
-  });
+  return fallback;
 };
 
 export async function sendChatMessage(conversation, userMessage) {
   try {
     const client = await getAI();
     if (!client) {
-      showAIToast('AI Not Configured', 'Please restart the app.');
-      return { success: false, text: 'AI is not configured.' };
+      return { success: false, text: 'Something went wrong. Please try again later.' };
     }
 
     const scans = await loadRecentScans();
@@ -172,7 +178,6 @@ export async function sendChatMessage(conversation, userMessage) {
   } catch (error) {
     console.warn('AI chat error:', error?.message);
     const msg = friendlyError(error, 'Something went wrong. Please try again.');
-    showAIToast('AI Error', msg);
     return { success: false, text: msg };
   }
 }
@@ -181,8 +186,7 @@ export async function sendChatWithImage(conversation, userMessage, imageUri) {
   try {
     const client = await getAI();
     if (!client) {
-      showAIToast('AI Not Configured', 'Please restart the app.');
-      return { success: false, text: 'AI is not configured.' };
+      return { success: false, text: 'Something went wrong. Please try again later.' };
     }
 
     const scans = await loadRecentScans();
@@ -216,7 +220,6 @@ export async function sendChatWithImage(conversation, userMessage, imageUri) {
   } catch (error) {
     console.warn('AI image error:', error?.message);
     const msg = friendlyError(error, 'Could not analyze that image. Please try again.');
-    showAIToast('AI Image Error', msg);
     return { success: false, text: msg };
   }
 }
@@ -225,8 +228,7 @@ export async function analyzeCropImage(imageUri) {
   try {
     const client = await getAI();
     if (!client) {
-      showAIToast('AI Not Configured', 'Please restart the app.');
-      return { success: false, error: 'AI is not configured.' };
+      return { success: false, error: 'Something went wrong. Please try again later.' };
     }
 
     const file = new File(imageUri);
@@ -289,7 +291,7 @@ Return ONLY a JSON object with these exact fields (no markdown, no code fences, 
     };
   } catch (error) {
     console.warn('Gemini scan error:', error?.message);
-    showAIToast('AI Scan Error', "Couldn't analyze the image. Please try again.");
-    return { success: false, error: error?.message || 'Analysis failed' };
+    const msg = friendlyError(error, "Couldn't analyze the image. Please try again.");
+    return { success: false, error: msg };
   }
 }

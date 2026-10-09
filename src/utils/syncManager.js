@@ -21,7 +21,7 @@ const loadQueue = async () => {
     const data = await AsyncStorage.getItem(QUEUE_KEY);
     return data ? JSON.parse(data) : [];
   } catch (error) {
-    console.error('Failed to load queue:', error);
+    if (__DEV__) console.log('[queue] load skipped:', error?.message);
     return [];
   }
 };
@@ -31,7 +31,7 @@ const saveQueue = async (queue) => {
   try {
     await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
   } catch (error) {
-    console.error('Failed to save queue:', error);
+    if (__DEV__) console.log('[queue] save skipped:', error?.message);
   }
 };
 
@@ -100,8 +100,8 @@ export const flushQueue = async () => {
         await saveQueue(remaining);
         return { flushed, failed, remaining: remaining.length };
       } else {
-        // Other error: log, drop this mutation, continue
-        console.error('Mutation failed permanently:', mutation, error);
+        // Other error: log quietly, drop this mutation, continue
+        if (__DEV__) console.log('[queue] mutation failed:', mutation?.type, error?.message);
         failed++;
       }
     }
@@ -308,7 +308,7 @@ export const getCachedScans = async () => {
     const data = await AsyncStorage.getItem(CACHE_KEY);
     return data ? JSON.parse(data) : [];
   } catch (error) {
-    console.error('Failed to get cached scans:', error);
+    if (__DEV__) console.log('[cache] get skipped:', error?.message);
     return [];
   }
 };

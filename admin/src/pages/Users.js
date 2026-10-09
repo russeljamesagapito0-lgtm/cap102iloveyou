@@ -2,11 +2,14 @@ import { useState, useEffect } from 'react';
 import Modal from '../components/Modal';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../context/ToastContext';
+import { downloadCsv } from '../lib/csv';
 import { supabase, fmtDate, logAudit } from '../lib/supabase';
+
+const PAGE_SIZE = 1000;
 
 const mapProfile = (p) => ({
   id: p.id,
-  name: p.full_name || p.email || 'Unnamed',
+  name: p.full_name || 'Unnamed',
   email: p.email || '-',
   scans: p.scans?.[0]?.count ?? 0,
   lastActive: fmtDate(p.last_active_at),
@@ -16,10 +19,148 @@ const mapProfile = (p) => ({
 const statusClass = (status) =>
   'status-text ' + (status === 'active' ? 'status-active' : 'status-suspended');
 
+const fetchAll = async (query) => {
+  let rows = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+    if (error) throw error;
+    rows = rows.concat(data);
+    if (data.length < PAGE_SIZE) break;
+  }
+  return rows;
+};
+
+const toUserBackupRows = (profile, scans) => {
+  const rows = [
+    {
+      section: 'profile',
+      id: profile.id,
+      email: profile.email,
+      full_name: profile.full_name,
+      plan: profile.plan,
+      role: profile.role,
+      status: profile.status,
+      last_active_at: profile.last_active_at,
+      created_at: profile.created_at,
+      disease_code: '',
+      predicted_code: '',
+      confidence: '',
+      region: '',
+      flagged: '',
+      corrected: '',
+      scan_created_at: '',
+      image_url: '',
+    },
+  ];
+
+  for (const s of scans) {
+    rows.push({
+      section: 'scan',
+      id: s.id,
+      email: '',
+      full_name: '',
+      plan: '',
+      role: '',
+      status: '',
+      last_active_at: '',
+      created_at: '',
+      disease_code: s.disease_code,
+      predicted_code: s.predicted_code,
+      confidence: s.confidence,
+      region: s.region,
+      flagged: s.flagged,
+      corrected: s.corrected,
+      scan_created_at: s.created_at,
+      image_url: s.image_url,
+    });
+  }
+
+  return rows;
+};
+
+const toGlobalBackupRows = (profiles, scans) => {
+  const rows = [];
+
+  for (const p of profiles) {
+    rows.push({
+      section: 'profile',
+      id: p.id,
+      email: p.email,
+      full_name: p.full_name,
+      plan: p.plan,
+      role: p.role,
+      status: p.status,
+      last_active_at: p.last_active_at,
+      created_at: p.created_at,
+      disease_code: '',
+      predicted_code: '',
+      confidence: '',
+      region: '',
+      flagged: '',
+      corrected: '',
+      scan_created_at: '',
+      image_url: '',
+    });
+  }
+
+  rows.push({
+    section: '--- scans below ---',
+    id: '',
+    email: '',
+    full_name: '',
+    plan: '',
+    role: '',
+    status: '',
+    last_active_at: '',
+    created_at: '',
+    disease_code: '',
+    predicted_code: '',
+    confidence: '',
+    region: '',
+    flagged: '',
+    corrected: '',
+    scan_created_at: '',
+    image_url: '',
+  });
+
+  for (const s of scans) {
+    rows.push({
+      section: 'scan',
+      id: s.id,
+      email: '',
+      full_name: '',
+      plan: '',
+      role: '',
+      status: '',
+      last_active_at: '',
+      created_at: '',
+      disease_code: s.disease_code,
+      predicted_code: s.predicted_code,
+      confidence: s.confidence,
+      region: s.region,
+      flagged: s.flagged,
+      corrected: s.corrected,
+      scan_created_at: s.created_at,
+      image_url: s.image_url,
+    });
+  }
+
+  return rows;
+};
+
+const slugify = (s) =>
+  (s || 'user').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+
+const datedName = (base) => {
+  const date = new Date().toISOString().slice(0, 10);
+  return `${base}_${date}.csv`;
+};
+
 export default function Users() {
   const [users, setUsers] = useState([]);
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState(null);
+  const [busy, setBusy] = useState(false);
   const confirm = useConfirm();
   const toast = useToast();
 
@@ -78,19 +219,109 @@ export default function Users() {
     setSelected(null);
   };
 
+  const backupUser = async () => {
+    if (!selected) return;
+
+    const ok = await confirm({
+      title: `Backup ${selected.name}?`,
+      message:
+        'This will download a CSV containing this user’s profile and scan history. Handle the file carefully.',
+      confirmText: 'Download',
+      tone: 'primary',
+    });
+    if (!ok) return;
+
+    setBusy(true);
+    try {
+      const { data: profile, error: pErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', selected.id)
+        .single();
+      if (pErr) throw pErr;
+
+      const scans = await fetchAll(
+        supabase
+          .from('scans')
+          .select('*')
+          .eq('user_id', selected.id)
+          .order('created_at', { ascending: false })
+      );
+
+      const rows = toUserBackupRows(profile, scans);
+      downloadCsv(datedName(`user_${slugify(selected.name)}`), rows);
+      logAudit('backup.user', 'user', selected.id, {
+        scans: scans.length,
+        email: selected.email,
+      });
+      toast.success('Backup downloaded', {
+        description: `${scans.length} scans`,
+      });
+    } catch (e) {
+      toast.error('Backup failed: ' + (e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const backupAll = async () => {
+    const ok = await confirm({
+      title: 'Backup all users and scans?',
+      message:
+        'This will download a CSV containing every profile and every scan in the system. This file may be large. Handle it carefully.',
+      confirmText: 'Download',
+      tone: 'primary',
+    });
+    if (!ok) return;
+
+    setBusy(true);
+    try {
+      const profiles = await fetchAll(
+        supabase.from('profiles').select('*').order('created_at')
+      );
+      const scans = await fetchAll(
+        supabase.from('scans').select('*').order('created_at')
+      );
+
+      const rows = toGlobalBackupRows(profiles, scans);
+      downloadCsv(datedName('rootcare_full_backup'), rows);
+      logAudit('backup.all', 'backup', null, {
+        profiles: profiles.length,
+        scans: scans.length,
+      });
+      toast.success('Full backup downloaded', {
+        description: `${profiles.length} users · ${scans.length} scans`,
+      });
+    } catch (e) {
+      toast.error('Backup failed: ' + (e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const selectedIsActive = selected?.status === 'active';
 
   return (
     <div className="stack-lg">
       <div className="flex-between">
         <p className="page-subtitle">{users.length} total users</p>
-        <input
-          className="input"
-          style={{ width: 300 }}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          placeholder="Search by name or email..."
-        />
+
+        <div className="flex-center" style={{ gap: 10 }}>
+          <input
+            className="input"
+            style={{ width: 280 }}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search by name or email..."
+          />
+          <button
+            className="btn btn-outline btn-sm"
+            onClick={backupAll}
+            disabled={busy}
+          >
+            {busy ? 'Preparing…' : 'Backup all'}
+          </button>
+        </div>
       </div>
 
       <div className="table-wrapper">
@@ -137,6 +368,13 @@ export default function Users() {
         title={selected ? `Manage ${selected.name}` : ''}
         footer={
           <>
+            <button
+              className="btn btn-outline"
+              onClick={backupUser}
+              disabled={busy}
+            >
+              {busy ? 'Preparing…' : 'Backup user'}
+            </button>
             <button className="btn btn-outline" onClick={() => setSelected(null)}>
               Cancel
             </button>
