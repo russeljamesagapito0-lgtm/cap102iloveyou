@@ -5,6 +5,8 @@ const LINKS = [
   { to: '/',      label: 'Dashboard', icon: 'dashboard' },
   { to: '/users', label: 'Users',     icon: 'users' },
   { to: '/scans', label: 'Scans',     icon: 'scans' },
+  { to: '/models', label: 'Models', icon: 'models' },
+  { to: '/maintenance', label: 'Maintenance', icon: 'maintenance' },
   { to: '/audit', label: 'Audit Log', icon: 'audit' },
 ];
 

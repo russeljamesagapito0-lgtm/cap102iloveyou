@@ -6,6 +6,8 @@ const PAGE_TITLES = {
   '/':      'Dashboard',
   '/users': 'Users',
   '/scans': 'Scans',
+  '/models': 'Model Management',
+  '/maintenance': 'Maintenance',
   '/audit': 'Audit Log',
 };
 

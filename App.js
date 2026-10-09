@@ -3,7 +3,7 @@ global.Buffer = global.Buffer || Buffer;
 import React, { useState, useEffect } from 'react';
 import { NavigationContainer, DefaultTheme as NavDefaultTheme, DarkTheme as NavDarkTheme } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
-import { View, ActivityIndicator } from 'react-native';
+import { View, ActivityIndicator, AppState } from 'react-native';
 import Toast from 'react-native-toast-message';
 import NetInfo from '@react-native-community/netinfo';
 import { supabase } from './src/utils/supabaseClient';
@@ -14,16 +14,41 @@ import RegisterScreen from './src/screens/RegisterScreen';
 import MainTabs from './src/navigation/MainTabs';
 import ScannerScreen from './src/screens/ScannerScreen';
 import ResultScreen from './src/screens/ResultScreen';
+import MaintenanceScreen from './src/screens/MaintenanceScreen';
+import { fetchMaintenance, DEFAULT_MAINTENANCE } from './src/utils/appConfig';
 
 import { loadOfflineModel } from './src/utils/offlineInference';
 import { flushQueue } from './src/utils/syncManager';
 
 const Stack = createStackNavigator();
 
+const MAINTENANCE_POLL_MS = 30 * 1000;
+
 const AppNavigator = () => {
   const { themeColors, isDarkMode, isLoading: themeLoading } = useTheme();
   const [isLoading, setIsLoading] = useState(true);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [maintenance, setMaintenance] = useState(DEFAULT_MAINTENANCE);
+  const [maintenanceChecked, setMaintenanceChecked] = useState(false);
+
+  const refreshMaintenance = React.useCallback(async () => {
+    const next = await fetchMaintenance();
+    setMaintenance(next);
+    setMaintenanceChecked(true);
+  }, []);
+
+  // Check on launch, every 30s while open, and whenever the app returns to the foreground.
+  useEffect(() => {
+    refreshMaintenance();
+    const interval = setInterval(refreshMaintenance, MAINTENANCE_POLL_MS);
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'active') refreshMaintenance();
+    });
+    return () => {
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, [refreshMaintenance]);
 
   useEffect(() => {
     const checkSession = async () => {
@@ -81,7 +106,7 @@ const AppNavigator = () => {
     return () => unsub();
   }, []);
 
-  if (isLoading || themeLoading) {
+  if (isLoading || themeLoading || !maintenanceChecked) {
     return (
       <View
         style={{
@@ -93,6 +118,16 @@ const AppNavigator = () => {
       >
         <ActivityIndicator size="large" color={themeColors.primary} />
       </View>
+    );
+  }
+
+  if (maintenance.enabled) {
+    return (
+      <MaintenanceScreen
+        message={maintenance.message}
+        eta={maintenance.eta}
+        onRetry={refreshMaintenance}
+      />
     );
   }
 

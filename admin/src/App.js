@@ -5,11 +5,15 @@ import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
 import Scans from './pages/Scans';
 import Audit from './pages/Audit';
+import Maintenance from './pages/Maintenance';
+import Models from './pages/Models';
 
 const protectedRoutes = [
   { path: '/',      element: <Dashboard /> },
   { path: '/users', element: <Users /> },
   { path: '/scans', element: <Scans /> },
+  { path: '/models', element: <Models /> },
+  { path: '/maintenance', element: <Maintenance /> },
   { path: '/audit', element: <Audit /> },
 ];
 
