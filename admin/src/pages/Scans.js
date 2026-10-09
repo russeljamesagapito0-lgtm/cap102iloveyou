@@ -8,6 +8,8 @@ import { supabase, fmtDate, logAudit } from '../lib/supabase';
 
 const PAGE_SIZE = 1000;
 const LOW_CONFIDENCE = 0.7;
+const MAX_SCANS = 200;
+const SCAN_SELECT = '*, profiles(full_name,email)';
 
 const confidenceClass = (c) => {
   if (c >= 0.8) return 'confidence confidence-high';
@@ -28,6 +30,21 @@ const exportRow = (s) => ({
   image_url: s.image_url,
 });
 
+// Shared by the initial fetch and the realtime handlers so the shape stays identical.
+const mapScan = (s, names) => ({
+  id: s.id,
+  code: s.disease_code,
+  predicted: s.predicted_code,
+  disease: names[s.disease_code] || s.disease_code || 'Unknown',
+  user: s.profiles?.full_name || s.profiles?.email || 'Unknown',
+  confidence: Number(s.confidence ?? 0),
+  date: fmtDate(s.created_at),
+  region: s.region || '-',
+  image_url: s.image_url,
+  flagged: s.flagged,
+  corrected: s.corrected,
+});
+
 export default function Scans() {
   const [scans, setScans] = useState([]);
   const [diseases, setDiseases] = useState([]);
@@ -38,37 +55,108 @@ export default function Scans() {
   const toast = useToast();
 
   useEffect(() => {
-    (async () => {
+    let cancelled = false;
+    let names = {};
+
+    // Resolves once the disease names are loaded, so realtime events
+    // that arrive early can wait for it instead of showing raw codes.
+    const namesReady = (async () => {
       const { data: d } = await supabase
         .from('diseases')
         .select('code,name')
         .order('name');
 
-      const names = Object.fromEntries((d || []).map((x) => [x.code, x.name]));
-      setDiseases(d || []);
+      names = Object.fromEntries((d || []).map((x) => [x.code, x.name]));
+      if (!cancelled) setDiseases(d || []);
+    })();
+
+    // Subscribe first, then fetch, so nothing inserted in between is missed.
+    const channel = supabase
+      .channel('scans-realtime')
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'scans' },
+        async (payload) => {
+          await namesReady;
+
+          // Realtime payloads have no join, so refetch this one row with profiles.
+          const { data } = await supabase
+            .from('scans')
+            .select(SCAN_SELECT)
+            .eq('id', payload.new.id)
+            .single();
+
+          if (cancelled || !data) return;
+
+          setScans((prev) => {
+            if (prev.some((x) => x.id === data.id)) return prev; // already have it
+            return [mapScan(data, names), ...prev].slice(0, MAX_SCANS);
+          });
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'scans' },
+        async (payload) => {
+          await namesReady;
+          const s = payload.new;
+          if (cancelled) return;
+
+          setScans((prev) =>
+            prev.map((x) =>
+              x.id === s.id
+                ? {
+                    ...x, // keeps `user` and `date`, which the payload can't rebuild
+                    code: s.disease_code,
+                    predicted: s.predicted_code,
+                    disease: names[s.disease_code] || s.disease_code || 'Unknown',
+                    confidence: Number(s.confidence ?? 0),
+                    region: s.region || '-',
+                    image_url: s.image_url,
+                    flagged: s.flagged,
+                    corrected: s.corrected,
+                  }
+                : x
+            )
+          );
+        }
+      )
+      .on(
+        'postgres_changes',
+        { event: 'DELETE', schema: 'public', table: 'scans' },
+        (payload) => {
+          const id = payload.old?.id;
+          if (!id || cancelled) return;
+          setScans((prev) => prev.filter((x) => x.id !== id));
+          setSelected((cur) => (cur?.id === id ? null : cur));
+        }
+      )
+      .subscribe();
+
+    // Initial load
+    (async () => {
+      await namesReady;
 
       const { data } = await supabase
         .from('scans')
-        .select('*, profiles(full_name,email)')
+        .select(SCAN_SELECT)
         .order('created_at', { ascending: false })
-        .limit(200);
+        .limit(MAX_SCANS);
 
-      setScans(
-        (data || []).map((s) => ({
-          id: s.id,
-          code: s.disease_code,
-          predicted: s.predicted_code,
-          disease: names[s.disease_code] || s.disease_code || 'Unknown',
-          user: s.profiles?.full_name || s.profiles?.email || 'Unknown',
-          confidence: Number(s.confidence ?? 0),
-          date: fmtDate(s.created_at),
-          region: s.region || '-',
-          image_url: s.image_url,
-          flagged: s.flagged,
-          corrected: s.corrected,
-        }))
-      );
+      if (cancelled) return;
+
+      setScans((prev) => {
+        const fetched = (data || []).map((s) => mapScan(s, names));
+        // Keep anything realtime delivered during the fetch that isn't in the result.
+        const extra = prev.filter((p) => !fetched.some((f) => f.id === p.id));
+        return [...extra, ...fetched].slice(0, MAX_SCANS);
+      });
     })();
+
+    return () => {
+      cancelled = true;
+      supabase.removeChannel(channel);
+    };
   }, []);
 
   const filtered = scans.filter((s) => {
@@ -118,6 +206,8 @@ export default function Scans() {
       to: newLabel,
     });
 
+    // Local update for instant feedback; the realtime UPDATE event will
+    // arrive afterwards with the same values, which is harmless.
     setScans((prev) =>
       prev.map((s) =>
         s.id === selected.id

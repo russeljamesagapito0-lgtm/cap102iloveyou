@@ -6,6 +6,12 @@ const AuthContext = createContext();
 const SESSION_MS = 60 * 60 * 1000;
 const EXPIRED_FLAG = 'rc_expired';
 const EXPIRY_CHECK_MS = 15000;
+const EXPIRES_KEY = 'rc_expires_at';
+
+const readExpiry = () => {
+  const v = Number(localStorage.getItem(EXPIRES_KEY));
+  return Number.isFinite(v) && v > 0 ? v : null;
+};
 
 const fetchProfile = async (userId) => {
   const { data } = await supabase
@@ -24,13 +30,24 @@ export function AuthProvider({ children }) {
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
+      if (data.session) {
+        let exp = readExpiry();
+        if (!exp) {
+          exp = Date.now() + SESSION_MS;
+          localStorage.setItem(EXPIRES_KEY, String(exp));
+        }
+        setExpiresAt(exp);
+      }
       setSession(data.session);
       setProfile(data.session ? await fetchProfile(data.session.user.id) : null);
       setLoading(false);
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, s) => {
-      if (_event === 'SIGNED_OUT') setExpiresAt(null);
+      if (_event === 'SIGNED_OUT') {
+        setExpiresAt(null);
+        localStorage.removeItem(EXPIRES_KEY);
+      }
       setSession(s);
       setProfile(s ? await fetchProfile(s.user.id) : null);
     });
@@ -50,7 +67,9 @@ export function AuthProvider({ children }) {
 
     setProfile(p);
     sessionStorage.removeItem(EXPIRED_FLAG);
-    setExpiresAt(Date.now() + SESSION_MS);
+    const exp = Date.now() + SESSION_MS;
+    localStorage.setItem(EXPIRES_KEY, String(exp));
+    setExpiresAt(exp);
   };
 
   const signOut = () => supabase.auth.signOut();
