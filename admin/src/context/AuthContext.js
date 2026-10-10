@@ -1,4 +1,4 @@
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { supabase, logAudit } from '../lib/supabase';
 
 const AuthContext = createContext();
@@ -6,19 +6,13 @@ const AuthContext = createContext();
 const SESSION_MS = 60 * 60 * 1000;
 const EXPIRED_FLAG = 'rc_expired';
 const EXPIRY_CHECK_MS = 15000;
-const EXPIRES_KEY = 'rc_expires_at';
-
-const readExpiry = () => {
-  const v = Number(localStorage.getItem(EXPIRES_KEY));
-  return Number.isFinite(v) && v > 0 ? v : null;
-};
 
 const fetchProfile = async (userId) => {
   const { data } = await supabase
     .from('profiles')
     .select('*')
     .eq('id', userId)
-    .single();
+    .maybeSingle();
   return data;
 };
 
@@ -27,29 +21,47 @@ export function AuthProvider({ children }) {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [expiresAt, setExpiresAt] = useState(null);
+  const loggedSessionRef = useRef(null);
+
+  const recordLogin = (s, p) => {
+    if (!s?.user?.id) return;
+    if (loggedSessionRef.current === s.access_token) return;
+    loggedSessionRef.current = s.access_token;
+
+    logAudit('login', 'admin', s.user.id, {
+      email: p?.email || s.user.email,
+      at: new Date().toISOString(),
+      method: 'session-restore',
+    });
+  };
 
   useEffect(() => {
     supabase.auth.getSession().then(async ({ data }) => {
-      if (data.session) {
-        let exp = readExpiry();
-        if (!exp) {
-          exp = Date.now() + SESSION_MS;
-          localStorage.setItem(EXPIRES_KEY, String(exp));
-        }
-        setExpiresAt(exp);
-      }
       setSession(data.session);
-      setProfile(data.session ? await fetchProfile(data.session.user.id) : null);
+      if (data.session) {
+        const p = await fetchProfile(data.session.user.id);
+        setProfile(p);
+        recordLogin(data.session, p);
+        setExpiresAt(Date.now() + SESSION_MS);
+      } else {
+        setProfile(null);
+      }
       setLoading(false);
     });
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, s) => {
       if (_event === 'SIGNED_OUT') {
         setExpiresAt(null);
-        localStorage.removeItem(EXPIRES_KEY);
+        loggedSessionRef.current = null;
       }
       setSession(s);
-      setProfile(s ? await fetchProfile(s.user.id) : null);
+      if (s) {
+        const p = await fetchProfile(s.user.id);
+        setProfile(p);
+        recordLogin(s, p);
+      } else {
+        setProfile(null);
+      }
     });
 
     return () => sub.subscription.unsubscribe();
@@ -65,16 +77,9 @@ export function AuthProvider({ children }) {
       throw new Error('This account is not an admin.');
     }
 
-    logAudit('login', 'admin', data.user.id, {
-      email: p.email,
-      at: new Date().toISOString(),
-    });
-
     setProfile(p);
     sessionStorage.removeItem(EXPIRED_FLAG);
-    const exp = Date.now() + SESSION_MS;
-    localStorage.setItem(EXPIRES_KEY, String(exp));
-    setExpiresAt(exp);
+    setExpiresAt(Date.now() + SESSION_MS);
   };
 
   const signOut = async () => {
@@ -84,6 +89,7 @@ export function AuthProvider({ children }) {
         at: new Date().toISOString(),
       });
     }
+    loggedSessionRef.current = null;
     await supabase.auth.signOut();
   };
 
@@ -99,6 +105,7 @@ export function AuthProvider({ children }) {
             reason: 'session_expired',
           });
         }
+        loggedSessionRef.current = null;
         sessionStorage.setItem(EXPIRED_FLAG, '1');
         supabase.auth.signOut();
       }

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import Modal from '../components/Modal';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../context/ToastContext';
@@ -37,7 +37,6 @@ const toUserBackupRows = (profile, scans) => {
       id: profile.id,
       email: profile.email,
       full_name: profile.full_name,
-      plan: profile.plan,
       role: profile.role,
       status: profile.status,
       last_active_at: profile.last_active_at,
@@ -59,7 +58,6 @@ const toUserBackupRows = (profile, scans) => {
       id: s.id,
       email: '',
       full_name: '',
-      plan: '',
       role: '',
       status: '',
       last_active_at: '',
@@ -87,7 +85,6 @@ const toGlobalBackupRows = (profiles, scans) => {
       id: p.id,
       email: p.email,
       full_name: p.full_name,
-      plan: p.plan,
       role: p.role,
       status: p.status,
       last_active_at: p.last_active_at,
@@ -108,7 +105,6 @@ const toGlobalBackupRows = (profiles, scans) => {
     id: '',
     email: '',
     full_name: '',
-    plan: '',
     role: '',
     status: '',
     last_active_at: '',
@@ -129,7 +125,6 @@ const toGlobalBackupRows = (profiles, scans) => {
       id: s.id,
       email: '',
       full_name: '',
-      plan: '',
       role: '',
       status: '',
       last_active_at: '',
@@ -159,6 +154,7 @@ const datedName = (base) => {
 export default function Users() {
   const [users, setUsers] = useState([]);
   const [query, setQuery] = useState('');
+  const [view, setView] = useState('active');
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
   const confirm = useConfirm();
@@ -172,10 +168,19 @@ export default function Users() {
       .then(({ data }) => setUsers((data || []).map(mapProfile)));
   }, []);
 
-  const filtered = users.filter((u) => {
+  const activeCount = users.filter((u) => u.status === 'active').length;
+  const suspendedCount = users.filter((u) => u.status === 'suspended').length;
+
+  const visibleUsers = useMemo(() => {
     const q = query.toLowerCase();
-    return u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q);
-  });
+    return users.filter((u) => {
+      if (u.status !== view) return false;
+      if (!q) return true;
+      return (
+        u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
+      );
+    });
+  }, [users, view, query]);
 
   const toggleStatus = async () => {
     if (!selected) return;
@@ -301,10 +306,32 @@ export default function Users() {
 
   const selectedIsActive = selected?.status === 'active';
 
+  const emptyMessage =
+    view === 'active'
+      ? query
+        ? 'No active users match your search.'
+        : 'No active users.'
+      : query
+      ? 'No suspended users match your search.'
+      : 'No suspended accounts.';
+
   return (
     <div className="stack-lg">
       <div className="flex-between">
-        <p className="page-subtitle">{users.length} total users</p>
+        <div className="filter-bar">
+          <button
+            className={'filter-btn' + (view === 'active' ? ' active' : '')}
+            onClick={() => setView('active')}
+          >
+            Active ({activeCount})
+          </button>
+          <button
+            className={'filter-btn' + (view === 'suspended' ? ' active' : '')}
+            onClick={() => setView('suspended')}
+          >
+            Suspended ({suspendedCount})
+          </button>
+        </div>
 
         <div className="flex-center" style={{ gap: 10 }}>
           <input
@@ -337,7 +364,7 @@ export default function Users() {
             </tr>
           </thead>
           <tbody>
-            {filtered.map((u) => (
+            {visibleUsers.map((u) => (
               <tr key={u.id}>
                 <td className="cell-strong">{u.name}</td>
                 <td className="cell-muted">{u.email}</td>
@@ -351,10 +378,10 @@ export default function Users() {
                 </td>
               </tr>
             ))}
-            {filtered.length === 0 && (
+            {visibleUsers.length === 0 && (
               <tr>
                 <td colSpan="6" className="text-center text-muted">
-                  No users found.
+                  {emptyMessage}
                 </td>
               </tr>
             )}
