@@ -4,17 +4,21 @@ import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
 import Scans from './pages/Scans';
-import Audit from './pages/Audit';
 import Maintenance from './pages/Maintenance';
 import Models from './pages/Models';
+import Analytics from './pages/Analytics';
+import Reports from './pages/Reports';
 
 const protectedRoutes = [
   { path: '/',      element: <Dashboard /> },
   { path: '/users', element: <Users /> },
   { path: '/scans', element: <Scans /> },
+  { path: '/analytics', element: <Analytics /> },
+  { path: '/reports', element: <Reports /> },
   { path: '/models', element: <Models /> },
   { path: '/maintenance', element: <Maintenance /> },
-  { path: '/audit', element: <Audit /> },
+  // Audit Log now lives inside Maintenance; keep old links working.
+  { path: '/audit', element: <Navigate to="/maintenance?tab=audit" replace /> },
 ];
 
 export default function App() {

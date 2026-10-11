@@ -1,13 +1,28 @@
 import { NavLink } from 'react-router-dom';
 import Icon from './Icon';
 
-const LINKS = [
-  { to: '/',      label: 'Dashboard', icon: 'dashboard' },
-  { to: '/users', label: 'Users',     icon: 'users' },
-  { to: '/scans', label: 'Scans',     icon: 'scans' },
-  { to: '/models', label: 'Models', icon: 'models' },
-  { to: '/maintenance', label: 'Maintenance', icon: 'maintenance' },
-  { to: '/audit', label: 'Audit Log', icon: 'audit' },
+const SECTIONS = [
+  {
+    links: [
+      { to: '/',      label: 'Dashboard', icon: 'dashboard' },
+      { to: '/users', label: 'Users',     icon: 'users' },
+      { to: '/scans', label: 'Scans',     icon: 'scans' },
+    ],
+  },
+  {
+    title: 'Insights',
+    links: [
+      { to: '/analytics', label: 'Analytics', icon: 'analytics' },
+      { to: '/reports',   label: 'Reports',   icon: 'reports' },
+    ],
+  },
+  {
+    title: 'Utilities',
+    links: [
+      { to: '/models',      label: 'Models',      icon: 'models' },
+      { to: '/maintenance', label: 'Maintenance', icon: 'maintenance' },
+    ],
+  },
 ];
 
 const navLinkClass = ({ isActive }) =>
@@ -25,18 +40,23 @@ export default function Sidebar() {
       </div>
 
       <nav className="sidebar-nav">
-        {LINKS.map(({ to, label, icon }) => (
-          <NavLink
-            key={to}
-            to={to}
-            end={to === '/'}
-            className={navLinkClass}
-          >
-            <span className="nav-icon">
-              <Icon name={icon} size={18} />
-            </span>
-            <span className="nav-label">{label}</span>
-          </NavLink>
+        {SECTIONS.map(({ title, links }) => (
+          <div className="nav-section" key={title || 'main'}>
+            {title && <div className="nav-section-label">{title}</div>}
+            {links.map(({ to, label, icon }) => (
+              <NavLink
+                key={to}
+                to={to}
+                end={to === '/'}
+                className={navLinkClass}
+              >
+                <span className="nav-icon">
+                  <Icon name={icon} size={18} />
+                </span>
+                <span className="nav-label">{label}</span>
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
 

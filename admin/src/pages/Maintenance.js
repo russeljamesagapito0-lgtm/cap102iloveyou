@@ -1,4 +1,6 @@
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
+import Audit from './Audit';
 import Badge from '../components/Badge';
 import Icon from '../components/Icon';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -19,7 +21,7 @@ const toLocalInput = (iso) => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
 };
 
-export default function Maintenance() {
+function MaintenancePanel() {
   const confirm = useConfirm();
   const toast = useToast();
 
@@ -188,6 +190,34 @@ export default function Maintenance() {
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+const TABS = [
+  { key: 'mode', label: 'Maintenance mode' },
+  { key: 'audit', label: 'Audit Log' },
+];
+
+export default function Maintenance() {
+  const [params, setParams] = useSearchParams();
+  const tab = params.get('tab') === 'audit' ? 'audit' : 'mode';
+
+  return (
+    <div className="stack-lg">
+      <div className="filter-bar">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            className={'filter-btn' + (tab === t.key ? ' active' : '')}
+            onClick={() => setParams(t.key === 'mode' ? {} : { tab: t.key })}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'mode' ? <MaintenancePanel /> : <Audit />}
     </div>
   );
 }

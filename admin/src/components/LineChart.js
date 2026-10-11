@@ -36,10 +36,10 @@ const smoothPath = (points) => {
   return d;
 };
 
-const formatScanLabel = (count) =>
-  `${count} scan${count !== 1 ? 's' : ''}`;
+const formatCountLabel = (count, unit) =>
+  `${count} ${unit}${count !== 1 ? 's' : ''}`;
 
-export default function LineChart({ data = [], height = 220 }) {
+export default function LineChart({ data = [], height = 220, unit = 'scan', labelEvery = 1 }) {
   const [hover, setHover] = useState(null);
 
   if (!data.length) return null;
@@ -126,6 +126,7 @@ export default function LineChart({ data = [], height = 220 }) {
         })}
 
         {pts.map((p, i) => {
+          if (i % labelEvery !== 0) return null;
           const isPeak = i === peakIndex && p.count > 0;
           return (
             <text
@@ -149,7 +150,7 @@ export default function LineChart({ data = [], height = 220 }) {
           style={{ left: `${(hoveredPt.x / WIDTH) * 100}%` }}
         >
           <span className="tooltip-day">{hoveredPt.day}</span>
-          <span className="tooltip-value">{formatScanLabel(hoveredPt.count)}</span>
+          <span className="tooltip-value">{formatCountLabel(hoveredPt.count, unit)}</span>
         </div>
       )}
     </div>

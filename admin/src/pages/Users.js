@@ -224,6 +224,18 @@ export default function Users() {
     setSelected(null);
   };
 
+  const exportUsers = () => {
+    const rows = visibleUsers.map((u) => ({
+      name: u.name,
+      email: u.email,
+      scans: u.scans,
+      last_active: u.lastActive,
+      status: u.status,
+    }));
+    downloadCsv(datedName(`users_${view}`), rows);
+    logAudit('export.users', 'user', null, { view, count: rows.length });
+  };
+
   const backupUser = async () => {
     if (!selected) return;
 
@@ -341,6 +353,9 @@ export default function Users() {
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search by name or email..."
           />
+          <button className="btn btn-outline btn-sm" onClick={exportUsers}>
+            Export {view}
+          </button>
           <button
             className="btn btn-outline btn-sm"
             onClick={backupAll}

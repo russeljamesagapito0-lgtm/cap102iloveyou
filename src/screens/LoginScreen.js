@@ -122,33 +122,9 @@ const LoginScreen = ({ navigation }) => {
     });
   };
 
-  const handleForgotPassword = async () => {
+  const handleForgotPassword = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    if (!email) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      return showModal('Email Required', 'Please enter your email address first.', 'warning');
-    }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
-      return showModal('Invalid Email', 'Please enter a valid email address.', 'warning');
-    }
-    setIsLoading(true);
-    try {
-      const { error } = await supabase.auth.resetPasswordForEmail(email.trim());
-      if (error) {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        showModal('Error', 'Failed to send password reset email. Please try again.', 'error');
-      } else {
-        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        showModal('Password Reset Sent', 'Check your email for password reset instructions.', 'success', () => closeModal());
-      }
-    } catch (error) {
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-      showModal('Error', 'An unexpected error occurred. Please try again.', 'error');
-    } finally {
-      setIsLoading(false);
-    }
+    navigation.navigate('ForgotPassword', { email: email.trim() });
   };
 
   const handleRegister = () => {

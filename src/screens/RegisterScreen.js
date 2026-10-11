@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -19,6 +19,8 @@ import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../utils/supabaseClient';
 import { useTheme } from '../context/ThemeContext';
+import SelectField from '../components/SelectField';
+import { fetchRegions, fetchProvinces, fetchRegionCities, fetchProvinceCities, fetchBarangays } from '../utils/psgcClient';
 
 const SUFFIX_OPTIONS = ['', 'Jr.', 'Sr.', 'I', 'II', 'III', 'IV', 'V'];
 
@@ -326,6 +328,67 @@ const RegisterScreen = ({ navigation }) => {
     });
   }, []);
 
+  // --- Address cascade (PSGC API): Region -> Province -> City/Municipality -> Barangay ---
+  const [addr, setAddr] = useState({ regionCode: '', regionName: '', provinceCode: '', cityCode: '' });
+  const [lists, setLists] = useState({ regions: [], provinces: [], cities: [], barangays: [] });
+  const [loadingKey, setLoadingKey] = useState(null); // 'regions' | 'provinces' | 'cities' | 'barangays'
+  const [loadError, setLoadError] = useState({});
+
+  const load = useCallback(async (key, fn) => {
+    setLoadingKey(key);
+    setLoadError(prev => ({ ...prev, [key]: null }));
+    try {
+      const data = await fn();
+      setLists(prev => ({ ...prev, [key]: data }));
+      return data;
+    } catch (e) {
+      setLoadError(prev => ({ ...prev, [key]: 'Could not load list. Check your connection and retry.' }));
+      return [];
+    } finally {
+      setLoadingKey(k => (k === key ? null : k));
+    }
+  }, []);
+
+  useEffect(() => { load('regions', fetchRegions); }, [load]);
+
+  const handleSelectRegion = useCallback(async (region) => {
+    setAddr({ regionCode: region.code, regionName: region.name, provinceCode: '', cityCode: '' });
+    setLists(prev => ({ ...prev, provinces: [], cities: [], barangays: [] }));
+    setFormData(prev => ({ ...prev, province: '', city: '', barangay: '' }));
+    setFieldErrors(prev => { const n = { ...prev }; delete n.region; delete n.province; delete n.city; delete n.barangay; return n; });
+    const provinces = await load('provinces', () => fetchProvinces(region.code));
+    if (provinces.length === 0) {
+      // No provinces: use the region name as the province value and load its cities directly.
+      setFormData(prev => ({ ...prev, province: region.name }));
+      await load('cities', () => fetchRegionCities(region.code));
+    }
+  }, [load]);
+
+  const handleSelectProvince = useCallback(async (province) => {
+    setAddr(prev => ({ ...prev, provinceCode: province.code, cityCode: '' }));
+    setLists(prev => ({ ...prev, cities: [], barangays: [] }));
+    setFormData(prev => ({ ...prev, province: province.name, city: '', barangay: '' }));
+    setFieldErrors(prev => { const n = { ...prev }; delete n.province; delete n.city; delete n.barangay; return n; });
+    await load('cities', () => fetchProvinceCities(province.code));
+  }, [load]);
+
+  const handleSelectCity = useCallback(async (city) => {
+    setAddr(prev => ({ ...prev, cityCode: city.code }));
+    setLists(prev => ({ ...prev, barangays: [] }));
+    setFormData(prev => ({ ...prev, city: city.name, barangay: '' }));
+    setFieldErrors(prev => { const n = { ...prev }; delete n.city; delete n.barangay; return n; });
+    await load('barangays', () => fetchBarangays(city.code));
+  }, [load]);
+
+  const handleSelectBarangay = useCallback((barangay) => {
+    updateField('barangay', barangay.name);
+  }, [updateField]);
+
+  const retryCities = useCallback(() => {
+    if (addr.provinceCode) return load('cities', () => fetchProvinceCities(addr.provinceCode));
+    if (addr.regionCode) return load('cities', () => fetchRegionCities(addr.regionCode));
+  }, [addr, load]);
+
   const calculateAge = useCallback((month, day, year) => {
     if (!month || !day || !year) return '';
     const birthDate = new Date(parseInt(year), parseInt(month) - 1, parseInt(day));
@@ -364,6 +427,7 @@ const RegisterScreen = ({ navigation }) => {
     let errors = {};
     const required = ['firstName', 'lastName', 'sex', 'address', 'province', 'city', 'barangay', 'email', 'password', 'confirmPassword'];
     required.forEach(field => { if (!formData[field] || formData[field].length < 2) errors[field] = true; });
+    if (!addr.regionCode) errors.region = true;
     if (formData.email) {
       const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
       if (!emailRegex.test(formData.email)) errors.email = true;
@@ -381,7 +445,7 @@ const RegisterScreen = ({ navigation }) => {
       return false;
     }
     return true;
-  }, [formData, isTermsChecked]);
+  }, [formData, isTermsChecked, addr.regionCode]);
 
   const handleRegister = useCallback(async () => {
     if (!validateForm()) return;
@@ -410,7 +474,7 @@ const RegisterScreen = ({ navigation }) => {
           middle_name: noMiddleName ? null : formData.middleName,
           last_name: formData.lastName, suffix: formData.suffix || null,
           sex: formData.sex, birth_date: birthDate,
-          address: formData.address, province: formData.province,
+          address: formData.address, region: addr.regionName, province: formData.province,
           city: formData.city, barangay: formData.barangay,
           zip_code: formData.zipCode || null, phone: formData.phone || null,
         };
@@ -547,29 +611,68 @@ const RegisterScreen = ({ navigation }) => {
               <View style={styles.inputWrapper}>
                 <View style={[styles.inputContainer, { backgroundColor: inputBg, borderColor: themeColors.border }, getInputStyle('address')]}>
                   <TextInput style={[styles.input, { color: themeColors.text }]} placeholder=" " value={formData.address} onChangeText={(t) => updateField('address', t)} autoCapitalize="words" placeholderTextColor={themeColors.textSecondary} />
-                  <Text style={[styles.floatingLabel, { color: themeColors.textSecondary, backgroundColor: labelBg }, formData.address && { top: 6, fontSize: 12, color: themeColors.primary }]}>Complete Address *</Text>
+                  <Text style={[styles.floatingLabel, { color: themeColors.textSecondary, backgroundColor: labelBg }, formData.address && { top: 6, fontSize: 12, color: themeColors.primary }]}>Street / House No. *</Text>
                 </View>
               </View>
 
               <View style={styles.inputWrapper}>
-                <View style={[styles.inputContainer, { backgroundColor: inputBg, borderColor: themeColors.border }, getInputStyle('province')]}>
-                  <TextInput style={[styles.input, { color: themeColors.text }]} placeholder=" " value={formData.province} onChangeText={(t) => updateField('province', t)} autoCapitalize="words" placeholderTextColor={themeColors.textSecondary} />
-                  <Text style={[styles.floatingLabel, { color: themeColors.textSecondary, backgroundColor: labelBg }, formData.province && { top: 6, fontSize: 12, color: themeColors.primary }]}>Province *</Text>
+                <SelectField
+                  label="Region *"
+                  value={addr.regionName}
+                  options={lists.regions}
+                  onSelect={handleSelectRegion}
+                  loading={loadingKey === 'regions'}
+                  error={loadError.regions}
+                  onRetry={() => load('regions', fetchRegions)}
+                  hasError={!!fieldErrors.region}
+                  placeholder="Select region"
+                />
+              </View>
+
+              {addr.regionCode && lists.provinces.length > 0 && (
+                <View style={styles.inputWrapper}>
+                  <SelectField
+                    label="Province *"
+                    value={formData.province}
+                    options={lists.provinces}
+                    onSelect={handleSelectProvince}
+                    loading={loadingKey === 'provinces'}
+                    error={loadError.provinces}
+                    onRetry={() => handleSelectRegion({ code: addr.regionCode, name: addr.regionName })}
+                    hasError={!!fieldErrors.province}
+                    placeholder="Select province"
+                  />
                 </View>
+              )}
+
+              <View style={styles.inputWrapper}>
+                <SelectField
+                  label="City/Municipality *"
+                  value={formData.city}
+                  options={lists.cities}
+                  onSelect={handleSelectCity}
+                  loading={loadingKey === 'cities'}
+                  error={loadError.cities}
+                  onRetry={retryCities}
+                  disabled={!addr.regionCode || (lists.provinces.length > 0 && !addr.provinceCode)}
+                  hasError={!!fieldErrors.city}
+                  placeholder={!addr.regionCode ? 'Select region first' : (lists.provinces.length > 0 && !addr.provinceCode ? 'Select province first' : 'Select city/municipality')}
+                />
               </View>
 
               <View style={styles.inputWrapper}>
-                <View style={[styles.inputContainer, { backgroundColor: inputBg, borderColor: themeColors.border }, getInputStyle('city')]}>
-                  <TextInput style={[styles.input, { color: themeColors.text }]} placeholder=" " value={formData.city} onChangeText={(t) => updateField('city', t)} autoCapitalize="words" placeholderTextColor={themeColors.textSecondary} />
-                  <Text style={[styles.floatingLabel, { color: themeColors.textSecondary, backgroundColor: labelBg }, formData.city && { top: 6, fontSize: 12, color: themeColors.primary }]}>City/Municipality *</Text>
-                </View>
-              </View>
-
-              <View style={styles.inputWrapper}>
-                <View style={[styles.inputContainer, { backgroundColor: inputBg, borderColor: themeColors.border }, getInputStyle('barangay')]}>
-                  <TextInput style={[styles.input, { color: themeColors.text }]} placeholder=" " value={formData.barangay} onChangeText={(t) => updateField('barangay', t)} autoCapitalize="words" placeholderTextColor={themeColors.textSecondary} />
-                  <Text style={[styles.floatingLabel, { color: themeColors.textSecondary, backgroundColor: labelBg }, formData.barangay && { top: 6, fontSize: 12, color: themeColors.primary }]}>Barangay *</Text>
-                </View>
+                <SelectField
+                  label="Barangay *"
+                  value={formData.barangay}
+                  options={lists.barangays}
+                  onSelect={handleSelectBarangay}
+                  loading={loadingKey === 'barangays'}
+                  error={loadError.barangays}
+                  onRetry={() => load('barangays', () => fetchBarangays(addr.cityCode))}
+                  disabled={!addr.cityCode}
+                  hasError={!!fieldErrors.barangay}
+                  placeholder={addr.cityCode ? 'Select barangay' : 'Select city first'}
+                />
               </View>
 
               <View style={styles.inputWrapper}>

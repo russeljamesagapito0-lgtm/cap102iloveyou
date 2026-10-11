@@ -1035,3 +1035,36 @@ select.input { cursor: pointer; }
 .modal-footer .btn-outline:first-child {
   margin-right: auto;
 }
+/* Sidebar sections */
+.nav-section { display: flex; flex-direction: column; gap: 4px; }
+.nav-section + .nav-section { margin-top: 12px; }
+.nav-section-label {
+  padding: 6px 12px 4px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--outline);
+}
+
+/* Horizontal bar lists (Analytics) */
+.bar-list { display: flex; flex-direction: column; gap: 14px; }
+.bar-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+.bar-label { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bar-value { font-weight: 600; color: var(--text); white-space: nowrap; }
+.bar-track { height: 8px; border-radius: 999px; background: var(--surface-container-high); overflow: hidden; }
+.bar-fill { height: 100%; border-radius: 999px; background: var(--primary); transition: width 0.3s; }
+
+/* Reports: print only the page content */
+@media print {
+  .sidebar, .topbar, .no-print { display: none !important; }
+  .app-shell, .main-area, .content { display: block; height: auto; overflow: visible; }
+  .content { padding: 0; }
+  body { background: #fff; }
+}

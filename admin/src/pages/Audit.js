@@ -14,15 +14,16 @@ const ACTION_COLORS = {
   'maintenance.off': 'green',
   'maintenance.update': 'blue',
   'model.switch': 'yellow',
+  'report.export': 'blue',
   login: 'green',
   logout: 'yellow',
 };
 
 const SESSION_ACTIONS = ['login', 'logout'];
 
-const adminName = (p) => p?.full_name || p?.email || '-';
+export const adminName = (p) => p?.full_name || p?.email || '-';
 
-const formatDetails = (action, details) => {
+export const formatDetails = (action, details) => {
   if (!details || typeof details !== 'object') return '-';
 
   switch (action) {
@@ -49,6 +50,9 @@ const formatDetails = (action, details) => {
     case 'maintenance.off':
     case 'maintenance.update':
       return details.message ? `Message: ${details.message}` : '-';
+
+    case 'report.export':
+      return `${details.report || 'report'} · ${details.rows ?? 0} rows`;
 
     case 'model.switch':
       return `${details.from || '?'} → ${details.to || '?'}`;

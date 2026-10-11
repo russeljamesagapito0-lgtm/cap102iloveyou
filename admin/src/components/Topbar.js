@@ -7,8 +7,9 @@ const PAGE_TITLES = {
   '/users': 'Users',
   '/scans': 'Scans',
   '/models': 'Model Management',
+  '/analytics': 'Analytics',
+  '/reports': 'Reports',
   '/maintenance': 'Maintenance',
-  '/audit': 'Audit Log',
 };
 
 const FALLBACK_TITLE = 'RootCare Admin';

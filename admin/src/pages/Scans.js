@@ -266,6 +266,23 @@ export default function Scans() {
       to: newLabel,
     });
 
+    // Tell the scan's owner their result was reviewed. Failure here must not
+    // undo the correction, so it only warns.
+    if (selected.userId) {
+      const changed = newLabel !== selected.code;
+      const { error: nErr } = await supabase.from('notifications').insert({
+        user_id: selected.userId,
+        scan_id: selected.id,
+        type: changed ? 'scan_corrected' : 'scan_confirmed',
+        title: changed ? 'Your scan was corrected' : 'Your scan was reviewed',
+        message: changed
+          ? `An admin reviewed your scan from ${selected.date} and changed the result from "${selected.disease}" to "${newName}".`
+          : `An admin reviewed your scan from ${selected.date} and confirmed the result: "${newName}".`,
+        data: { from: selected.code, to: newLabel },
+      });
+      if (nErr) toast.error('Saved, but could not notify the user: ' + nErr.message);
+    }
+
     // Local update for instant feedback; the realtime UPDATE event will
     // arrive afterwards with the same values, which is harmless.
     setScans((prev) =>
