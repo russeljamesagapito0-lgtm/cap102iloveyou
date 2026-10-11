@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import Badge from '../components/Badge';
 import Modal from '../components/Modal';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -8,9 +9,6 @@ import { supabase, fmtDate, logAudit } from '../lib/supabase';
 
 const PAGE_SIZE = 1000;
 const LOW_CONFIDENCE = 0.7;
-// Per-user scan counts are computed from this list, so it must cover all users.
-const MAX_SCANS = 1000;
-const SCAN_SELECT = '*, profiles(full_name,email)';
 
 const confidenceClass = (c) => {
   if (c >= 0.8) return 'confidence confidence-high';
@@ -31,7 +29,6 @@ const exportRow = (s) => ({
   image_url: s.image_url,
 });
 
-// Shared by the initial fetch and the realtime handlers so the shape stays identical.
 const buildScanObject = (s, names) => ({
   id: s.id,
   userId: s.user_id,
@@ -51,6 +48,9 @@ const buildScanObject = (s, names) => ({
 const displayName = (p) => p.full_name || p.email || 'Unnamed';
 
 export default function Scans() {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const targetUserId = searchParams.get('user');
+
   const [scans, setScans] = useState([]);
   const [profiles, setProfiles] = useState([]);
   const [diseases, setDiseases] = useState([]);
@@ -63,117 +63,46 @@ export default function Scans() {
   const toast = useToast();
 
   useEffect(() => {
-    let cancelled = false;
-    let names = {};
-
-    // Resolves once diseases + profiles are loaded, so realtime events
-    // that arrive early wait for it instead of showing raw codes.
-    const lookupsReady = (async () => {
+    (async () => {
       const { data: d } = await supabase
         .from('diseases')
         .select('code,name')
         .order('name');
 
-      names = Object.fromEntries((d || []).map((x) => [x.code, x.name]));
-      if (!cancelled) setDiseases(d || []);
+      const names = Object.fromEntries((d || []).map((x) => [x.code, x.name]));
+      setDiseases(d || []);
 
       const { data: p } = await supabase
         .from('profiles')
         .select('id, full_name, email')
         .order('full_name', { ascending: true, nullsFirst: false });
 
-      if (!cancelled) setProfiles(p || []);
-    })();
-
-    // Subscribe first, then fetch, so nothing inserted in between is missed.
-    const channel = supabase
-      .channel('scans-realtime')
-      .on(
-        'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'scans' },
-        async (payload) => {
-          await lookupsReady;
-
-          // Realtime payloads have no join, so refetch this one row with profiles.
-          const { data } = await supabase
-            .from('scans')
-            .select(SCAN_SELECT)
-            .eq('id', payload.new.id)
-            .single();
-
-          if (cancelled || !data) return;
-
-          setScans((prev) => {
-            if (prev.some((x) => x.id === data.id)) return prev; // already have it
-            return [buildScanObject(data, names), ...prev].slice(0, MAX_SCANS);
-          });
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'scans' },
-        async (payload) => {
-          await lookupsReady;
-          const s = payload.new;
-          if (cancelled) return;
-
-          setScans((prev) =>
-            prev.map((x) =>
-              x.id === s.id
-                ? {
-                    ...x, // keeps `user`, `email`, `userId` and `date`, which the payload can't rebuild
-                    code: s.disease_code,
-                    predicted: s.predicted_code,
-                    disease: names[s.disease_code] || s.disease_code || 'Unknown',
-                    confidence: Number(s.confidence ?? 0),
-                    region: s.region || '-',
-                    image_url: s.image_url,
-                    flagged: s.flagged,
-                    corrected: s.corrected,
-                  }
-                : x
-            )
-          );
-        }
-      )
-      .on(
-        'postgres_changes',
-        { event: 'DELETE', schema: 'public', table: 'scans' },
-        (payload) => {
-          const id = payload.old?.id;
-          if (!id || cancelled) return;
-          setScans((prev) => prev.filter((x) => x.id !== id));
-          setSelected((cur) => (cur?.id === id ? null : cur));
-        }
-      )
-      .subscribe();
-
-    // Initial load
-    (async () => {
-      await lookupsReady;
+      setProfiles(p || []);
 
       const { data } = await supabase
         .from('scans')
-        .select(SCAN_SELECT)
+        .select('*, profiles(full_name,email)')
         .order('created_at', { ascending: false })
-        .limit(MAX_SCANS);
+        .limit(1000);
 
-      if (cancelled) return;
+      setScans((data || []).map((s) => buildScanObject(s, names)));
 
-      setScans((prev) => {
-        const fetched = (data || []).map((s) => buildScanObject(s, names));
-        // Keep anything realtime delivered during the fetch that isn't in the result.
-        const extra = prev.filter((p) => !fetched.some((f) => f.id === p.id));
-        return [...extra, ...fetched].slice(0, MAX_SCANS);
-      });
+      if (targetUserId && p) {
+        const match = p.find((row) => row.id === targetUserId);
+        if (match) {
+          setSelectedUser({
+            id: match.id,
+            name: displayName(match),
+            email: match.email || '',
+            scans: 0,
+            flagged: 0,
+          });
+        }
+      }
+
       setLoading(false);
     })();
-
-    return () => {
-      cancelled = true;
-      supabase.removeChannel(channel);
-    };
-  }, []);
+  }, [targetUserId]);
 
   const users = useMemo(() => {
     const statsById = new Map();
@@ -225,6 +154,7 @@ export default function Scans() {
   const backToUsers = () => {
     setSelectedUser(null);
     setFilter('all');
+    setSearchParams({});
   };
 
   const openModal = (s) => {
@@ -266,25 +196,6 @@ export default function Scans() {
       to: newLabel,
     });
 
-    // Tell the scan's owner their result was reviewed. Failure here must not
-    // undo the correction, so it only warns.
-    if (selected.userId) {
-      const changed = newLabel !== selected.code;
-      const { error: nErr } = await supabase.from('notifications').insert({
-        user_id: selected.userId,
-        scan_id: selected.id,
-        type: changed ? 'scan_corrected' : 'scan_confirmed',
-        title: changed ? 'Your scan was corrected' : 'Your scan was reviewed',
-        message: changed
-          ? `An admin reviewed your scan from ${selected.date} and changed the result from "${selected.disease}" to "${newName}".`
-          : `An admin reviewed your scan from ${selected.date} and confirmed the result: "${newName}".`,
-        data: { from: selected.code, to: newLabel },
-      });
-      if (nErr) toast.error('Saved, but could not notify the user: ' + nErr.message);
-    }
-
-    // Local update for instant feedback; the realtime UPDATE event will
-    // arrive afterwards with the same values, which is harmless.
     setScans((prev) =>
       prev.map((s) =>
         s.id === selected.id
