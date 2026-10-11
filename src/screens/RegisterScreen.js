@@ -452,8 +452,27 @@ const RegisterScreen = ({ navigation }) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setIsLoading(true);
     try {
+      const birthDate = formData.year && formData.month && formData.day
+        ? `${formData.year}-${formData.month.padStart(2, '0')}-${formData.day.padStart(2, '0')}`
+        : null;
+      // Profile fields. The row is written AFTER the email code is verified (see VerifyEmailScreen),
+      // because with email confirmation on there is no session yet and RLS would reject the insert.
+      const profile = {
+        display_name: `${formData.firstName} ${formData.lastName}`.trim(),
+        first_name: formData.firstName,
+        middle_name: noMiddleName ? null : formData.middleName,
+        last_name: formData.lastName, suffix: formData.suffix || null,
+        sex: formData.sex, birth_date: birthDate,
+        address: formData.address, region: addr.regionName, province: formData.province,
+        city: formData.city, barangay: formData.barangay,
+        zip_code: formData.zipCode || null, phone: formData.phone || null,
+      };
+      const email = formData.email.trim();
+
       const { data: authData, error: authError } = await supabase.auth.signUp({
-        email: formData.email.trim(), password: formData.password,
+        email, password: formData.password,
+        // Kept in user_metadata so the profile can still be created if the app is closed mid-verification.
+        options: { data: { profile } },
       });
       if (authError) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -463,26 +482,14 @@ const RegisterScreen = ({ navigation }) => {
         showModal('Error', message, 'error');
         return;
       }
-      if (authData.user) {
-        const birthDate = formData.year && formData.month && formData.day
-          ? `${formData.year}-${formData.month.padStart(2, '0')}-${formData.day.padStart(2, '0')}`
-          : null;
-        const profileData = {
-          id: authData.user.id, email: formData.email.trim(),
-          display_name: `${formData.firstName} ${formData.lastName}`.trim(),
-          first_name: formData.firstName,
-          middle_name: noMiddleName ? null : formData.middleName,
-          last_name: formData.lastName, suffix: formData.suffix || null,
-          sex: formData.sex, birth_date: birthDate,
-          address: formData.address, region: addr.regionName, province: formData.province,
-          city: formData.city, barangay: formData.barangay,
-          zip_code: formData.zipCode || null, phone: formData.phone || null,
-        };
-        const { error: profileError } = await supabase.from('profiles').upsert(profileData);
-        if (profileError) console.error(' Profile creation error:', profileError.message);
+      // With email confirmation on, Supabase hides "already registered" by returning a user with no identities.
+      if (authData.user && Array.isArray(authData.user.identities) && authData.user.identities.length === 0) {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        showModal('Error', 'This email is already registered. Please login instead.', 'error');
+        return;
       }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      showModal(' Registration Successful!', 'Your account has been created successfully. Please login to continue.', 'success', () => navigation.replace('Login'));
+      navigation.navigate('VerifyEmail', { email, profile });
     } catch (error) {
       console.error(' Registration exception:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -490,7 +497,7 @@ const RegisterScreen = ({ navigation }) => {
     } finally {
       setIsLoading(false);
     }
-  }, [validateForm, formData, noMiddleName, navigation, profileImage]);
+  }, [validateForm, formData, noMiddleName, navigation, profileImage, addr.regionName]);
 
   const handleLogin = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

@@ -100,7 +100,10 @@ const LoginScreen = ({ navigation }) => {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         let message = 'An error occurred during login.';
         if (error.message.includes('Invalid login credentials')) message = 'Invalid email or password. Please try again.';
-        else if (error.message.includes('Email not confirmed')) message = 'Please confirm your email address before logging in.';
+        else if (error.message.includes('Email not confirmed')) {
+          // Unverified account: send a fresh code and jump to the verification screen.
+          return navigation.navigate('VerifyEmail', { email: email.trim(), autoResend: true });
+        }
         return showModal('Error', message, 'error');
       }
 
