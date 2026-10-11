@@ -1,11 +1,13 @@
 import { useState, useEffect, useMemo } from 'react';
 import Modal from '../components/Modal';
+import Badge from '../components/Badge';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
 import { supabase, fmtDate, logAudit } from '../lib/supabase';
 
 const PAGE_SIZE = 1000;
+const SCANS_PER_PAGE = 8;
 
 const mapProfile = (p) => ({
   id: p.id,
@@ -18,6 +20,25 @@ const mapProfile = (p) => ({
 
 const statusClass = (status) =>
   'status-text ' + (status === 'active' ? 'status-active' : 'status-suspended');
+
+const confidenceClass = (c) => {
+  if (c >= 0.8) return 'confidence confidence-high';
+  if (c >= 0.6) return 'confidence confidence-mid';
+  return 'confidence confidence-low';
+};
+
+const buildScan = (s, names) => ({
+  id: s.id,
+  code: s.disease_code,
+  predicted: s.predicted_code,
+  disease: names[s.disease_code] || s.disease_code || 'Unknown',
+  confidence: Number(s.confidence ?? 0),
+  date: fmtDate(s.created_at),
+  region: s.region || '-',
+  image_url: s.image_url,
+  flagged: s.flagged,
+  corrected: s.corrected,
+});
 
 const fetchAll = async (query) => {
   let rows = [];
@@ -157,6 +178,14 @@ export default function Users() {
   const [view, setView] = useState('active');
   const [selected, setSelected] = useState(null);
   const [busy, setBusy] = useState(false);
+
+  const [scanCache, setScanCache] = useState({});
+  const [diseases, setDiseases] = useState([]);
+  const [loadingScans, setLoadingScans] = useState(false);
+  const [scanVisibleCount, setScanVisibleCount] = useState(SCANS_PER_PAGE);
+  const [reviewTarget, setReviewTarget] = useState(null);
+  const [newLabel, setNewLabel] = useState('');
+
   const confirm = useConfirm();
   const toast = useToast();
 
@@ -166,6 +195,12 @@ export default function Users() {
       .select('*, scans(count)')
       .order('created_at', { ascending: false })
       .then(({ data }) => setUsers((data || []).map(mapProfile)));
+
+    supabase
+      .from('diseases')
+      .select('code,name')
+      .order('name')
+      .then(({ data }) => setDiseases(data || []));
   }, []);
 
   const activeCount = users.filter((u) => u.status === 'active').length;
@@ -181,6 +216,42 @@ export default function Users() {
       );
     });
   }, [users, view, query]);
+
+  const diseaseNames = useMemo(
+    () => Object.fromEntries(diseases.map((d) => [d.code, d.name])),
+    [diseases]
+  );
+
+  const openUser = async (u) => {
+    setSelected(u);
+    setScanVisibleCount(SCANS_PER_PAGE);
+
+    if (!scanCache[u.id]) {
+      setLoadingScans(true);
+      try {
+        const { data, error } = await supabase
+          .from('scans')
+          .select('*')
+          .eq('user_id', u.id)
+          .order('created_at', { ascending: false })
+          .limit(500);
+
+        if (error) throw error;
+        const scans = (data || []).map((s) => buildScan(s, diseaseNames));
+        setScanCache((prev) => ({ ...prev, [u.id]: scans }));
+      } catch (e) {
+        toast.error('Failed to load scans: ' + e.message);
+      } finally {
+        setLoadingScans(false);
+      }
+    }
+  };
+
+  const closeUser = () => {
+    setSelected(null);
+    setReviewTarget(null);
+    setNewLabel('');
+  };
 
   const toggleStatus = async () => {
     if (!selected) return;
@@ -221,7 +292,7 @@ export default function Users() {
       description: selected.name,
     });
 
-    setSelected(null);
+    setSelected((prev) => (prev ? { ...prev, status: nextStatus } : prev));
   };
 
   const exportUsers = () => {
@@ -316,7 +387,75 @@ export default function Users() {
     }
   };
 
+  const openReview = (scan) => {
+    setReviewTarget(scan);
+    setNewLabel(scan.code || '');
+  };
+
+  const closeReview = () => {
+    setReviewTarget(null);
+    setNewLabel('');
+  };
+
+  const saveCorrection = async () => {
+    if (!reviewTarget || !selected) return;
+
+    const newName = diseaseNames[newLabel] || newLabel;
+
+    const ok = await confirm({
+      title: 'Save correction?',
+      message: `Change the label from "${reviewTarget.disease}" to "${newName}"? This will be logged in the audit trail.`,
+      confirmText: 'Save',
+      tone: 'primary',
+    });
+
+    if (!ok) return;
+
+    const { error } = await supabase
+      .from('scans')
+      .update({
+        predicted_code: reviewTarget.predicted || reviewTarget.code,
+        disease_code: newLabel,
+        flagged: false,
+        corrected: true,
+      })
+      .eq('id', reviewTarget.id);
+
+    if (error) {
+      toast.error('Failed to save correction: ' + error.message);
+      return;
+    }
+
+    logAudit('update', 'scan', reviewTarget.id, {
+      from: reviewTarget.code,
+      to: newLabel,
+    });
+
+    setScanCache((prev) => {
+      const userScans = prev[selected.id] || [];
+      const updated = userScans.map((s) =>
+        s.id === reviewTarget.id
+          ? {
+              ...s,
+              predicted: s.predicted || s.code,
+              code: newLabel,
+              disease: newName,
+              flagged: false,
+              corrected: true,
+            }
+          : s
+      );
+      return { ...prev, [selected.id]: updated };
+    });
+
+    toast.success('Correction saved', { description: newName });
+    closeReview();
+  };
+
   const selectedIsActive = selected?.status === 'active';
+  const selectedScans = selected ? scanCache[selected.id] || [] : [];
+  const visibleScans = selectedScans.slice(0, scanVisibleCount);
+  const hasMoreScans = selectedScans.length > scanVisibleCount;
 
   const emptyMessage =
     view === 'active'
@@ -387,7 +526,7 @@ export default function Users() {
                 <td className="cell-muted">{u.lastActive}</td>
                 <td className={statusClass(u.status)}>{u.status}</td>
                 <td className="text-right">
-                  <button className="link-btn" onClick={() => setSelected(u)}>
+                  <button className="link-btn" onClick={() => openUser(u)}>
                     Manage
                   </button>
                 </td>
@@ -406,7 +545,7 @@ export default function Users() {
 
       <Modal
         open={!!selected}
-        onClose={() => setSelected(null)}
+        onClose={closeUser}
         title={selected ? `Manage ${selected.name}` : ''}
         footer={
           <>
@@ -417,8 +556,8 @@ export default function Users() {
             >
               {busy ? 'Preparing…' : 'Backup user'}
             </button>
-            <button className="btn btn-outline" onClick={() => setSelected(null)}>
-              Cancel
+            <button className="btn btn-outline" onClick={closeUser}>
+              Close
             </button>
             <button
               className={'btn ' + (selectedIsActive ? 'btn-danger' : 'btn-primary')}
@@ -430,22 +569,153 @@ export default function Users() {
         }
       >
         {selected && (
-          <div>
-            <div className="info-row">
-              <span className="info-row-label">Email</span>
-              <span className="info-row-value">{selected.email}</span>
+          <div className="user-manage-body">
+            <div>
+              <div className="info-row">
+                <span className="info-row-label">Email</span>
+                <span className="info-row-value">{selected.email}</span>
+              </div>
+              <div className="info-row">
+                <span className="info-row-label">Total scans</span>
+                <span className="info-row-value">{selected.scans}</span>
+              </div>
+              <div className="info-row">
+                <span className="info-row-label">Last active</span>
+                <span className="info-row-value">{selected.lastActive}</span>
+              </div>
+              <div className="info-row">
+                <span className="info-row-label">Status</span>
+                <span className={statusClass(selected.status)}>{selected.status}</span>
+              </div>
             </div>
-            <div className="info-row">
-              <span className="info-row-label">Total scans</span>
-              <span className="info-row-value">{selected.scans}</span>
+
+            <div className="scan-section">
+              <div className="scan-section-header">
+                <span className="scan-section-title">Scans</span>
+                {selectedScans.length > 0 && (
+                  <span className="scan-section-count">
+                    {selectedScans.length}
+                  </span>
+                )}
+              </div>
+
+              {loadingScans ? (
+                <p className="text-muted" style={{ fontSize: 13 }}>
+                  Loading scans…
+                </p>
+              ) : selectedScans.length === 0 ? (
+                <p className="text-muted" style={{ fontSize: 13 }}>
+                  This user has no scans yet.
+                </p>
+              ) : (
+                <>
+                  <div className="scan-mini-grid">
+                    {visibleScans.map((s) => (
+                      <div key={s.id} className="scan-mini-card">
+                        <div className="scan-mini-thumb">
+                          {s.image_url ? (
+                            <img
+                              src={s.image_url}
+                              alt=""
+                              className="scan-img"
+                            />
+                          ) : (
+                            s.disease
+                          )}
+                        </div>
+                        <div className="scan-mini-body">
+                          <div className="scan-title-row">
+                            <span className="scan-title">{s.disease}</span>
+                            {s.flagged && <Badge color="red">flagged</Badge>}
+                            {s.corrected && <Badge color="blue">corrected</Badge>}
+                          </div>
+                          <div className="scan-mini-footer">
+                            <span className={confidenceClass(s.confidence)}>
+                              {(s.confidence * 100).toFixed(0)}%
+                            </span>
+                            <button
+                              className="link-btn"
+                              onClick={() => openReview(s)}
+                            >
+                              Review
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  {hasMoreScans && (
+                    <button
+                      className="btn btn-outline btn-sm"
+                      onClick={() => setScanVisibleCount((c) => c + SCANS_PER_PAGE)}
+                      style={{ marginTop: 12 }}
+                    >
+                      Load {Math.min(SCANS_PER_PAGE, selectedScans.length - scanVisibleCount)} more
+                    </button>
+                  )}
+                </>
+              )}
             </div>
-            <div className="info-row">
-              <span className="info-row-label">Last active</span>
-              <span className="info-row-value">{selected.lastActive}</span>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={!!reviewTarget}
+        onClose={closeReview}
+        title="Review scan"
+        footer={
+          <>
+            <button className="btn btn-outline" onClick={closeReview}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={saveCorrection}>
+              Save correction
+            </button>
+          </>
+        }
+      >
+        {reviewTarget && (
+          <div className="stack-md">
+            <div className="scan-thumb scan-thumb-lg">
+              {reviewTarget.image_url ? (
+                <img src={reviewTarget.image_url} alt="" className="scan-img" />
+              ) : (
+                reviewTarget.disease
+              )}
             </div>
-            <div className="info-row">
-              <span className="info-row-label">Status</span>
-              <span className={statusClass(selected.status)}>{selected.status}</span>
+
+            <div>
+              <div className="info-row">
+                <span className="info-row-label">Region</span>
+                <span className="info-row-value">{reviewTarget.region}</span>
+              </div>
+              <div className="info-row">
+                <span className="info-row-label">Date</span>
+                <span className="info-row-value">{reviewTarget.date}</span>
+              </div>
+              <div className="info-row">
+                <span className="info-row-label">AI predicted</span>
+                <span className="info-row-value">
+                  {reviewTarget.disease} (
+                  {(reviewTarget.confidence * 100).toFixed(0)}%)
+                </span>
+              </div>
+            </div>
+
+            <div>
+              <label className="label">Correct label</label>
+              <select
+                className="input"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+              >
+                {diseases.map((d) => (
+                  <option key={d.code} value={d.code}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         )}

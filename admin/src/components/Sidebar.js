@@ -6,7 +6,6 @@ const SECTIONS = [
     links: [
       { to: '/',      label: 'Dashboard', icon: 'dashboard' },
       { to: '/users', label: 'Users',     icon: 'users' },
-      { to: '/scans', label: 'Scans',     icon: 'scans' },
     ],
   },
   {
