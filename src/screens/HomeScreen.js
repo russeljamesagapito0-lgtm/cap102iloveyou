@@ -1,10 +1,14 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { View,Text,StyleSheet,TouchableOpacity,ScrollView,Image,ImageBackground,Animated,RefreshControl,Platform,Modal,StatusBar,ActivityIndicator,}
-from 'react-native';
+import {
+  View, Text, StyleSheet, TouchableOpacity, ScrollView, Image,
+  ImageBackground, Animated, RefreshControl, Platform, Modal,
+  StatusBar, ActivityIndicator,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../utils/supabaseClient';
 import { useTheme } from '../context/ThemeContext';
@@ -26,11 +30,69 @@ const fertilizerTips = [
 ];
 
 const cropCareTips = [
-  { id: '1', icon: 'water-outline', title: 'Watering', description: 'Water deeply 2-3 times per week.' },
-  { id: '2', icon: 'leaf-outline', title: 'Weeding', description: 'Remove weeds weekly to reduce competition.' },
-  { id: '3', icon: 'bug-outline', title: 'Pest Control', description: 'Inspect leaves for pests every 3 days.' },
-  { id: '4', icon: 'cut-outline', title: 'Pruning', description: 'Remove dead or diseased leaves promptly.' },
+  {
+    id: '1',
+    icon: 'water-outline',
+    title: 'Watering',
+    description: 'Water deeply 2-3 times per week.',
+    detail:
+      'Water early in the morning or late afternoon to reduce evaporation. For cassava and root crops, aim for about 25–40mm per week. Avoid waterlogging — soggy soil invites root rot. During dry spells, increase frequency but keep each watering deep, not shallow.',
+    tips: ['Check top 5cm of soil before watering', 'Prefer drip irrigation if available', 'Mulch to retain moisture'],
+  },
+  {
+    id: '2',
+    icon: 'leaf-outline',
+    title: 'Weeding',
+    description: 'Remove weeds weekly to reduce competition.',
+    detail:
+      'Weeds compete for nutrients, water, and sunlight — especially during the first 6–8 weeks after planting. Hand-pull or hoe carefully to avoid damaging shallow root systems. Keep the field clean around the base of each plant.',
+    tips: ['Weed when soil is slightly dry', 'Remove weeds before they seed', 'Compost only disease-free weeds'],
+  },
+  {
+    id: '3',
+    icon: 'bug-outline',
+    title: 'Pest Control',
+    description: 'Inspect leaves for pests every 3 days.',
+    detail:
+      'Common pests for root crops include whiteflies, mealybugs, and spider mites. Inspect the underside of leaves and growing tips. Use neem oil or insecticidal soap for mild infestations. For severe cases, consult your local agriculturist before applying chemical pesticides.',
+    tips: ['Encourage natural predators (ladybugs)', 'Rotate crops yearly', 'Remove heavily infested leaves'],
+  },
+  {
+    id: '4',
+    icon: 'cut-outline',
+    title: 'Pruning',
+    description: 'Remove dead or diseased leaves promptly.',
+    detail:
+      'Remove yellowing, dead, or diseased leaves to improve airflow and reduce disease spread. Use clean, sharp shears and disinfect between plants. For root crops, avoid heavy pruning — the leaves produce the energy stored in roots.',
+    tips: ['Prune in dry weather', 'Disinfect tools between plants', 'Never prune more than 1/3 at once'],
+  },
 ];
+
+// ---------- CALENDAR MARK STORAGE ----------
+const CALENDAR_MARK_KEY = '@crop_calendar_marks_v1';
+const MARK_TYPES = {
+  plant:   { label: 'Plant',   color: '#0D631B', icon: 'leaf' },
+  water:   { label: 'Water',   color: '#2563EB', icon: 'water' },
+  harvest: { label: 'Harvest', color: '#B45309', icon: 'basket' },
+  rain:    { label: 'Rain',    color: '#0EA5E9', icon: 'rainy' },
+};
+
+const loadCalendarMarks = async () => {
+  try {
+    const raw = await AsyncStorage.getItem(CALENDAR_MARK_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+};
+
+const saveCalendarMarks = async (marks) => {
+  try {
+    await AsyncStorage.setItem(CALENDAR_MARK_KEY, JSON.stringify(marks));
+  } catch (e) {
+    console.warn('Failed to save calendar marks:', e.message);
+  }
+};
 
 const timeAgo = (dateString) => {
   if (!dateString) return '';
@@ -126,26 +188,236 @@ const buildGoodPlantingDays = (forecast) => {
   return map;
 };
 
+// ---------- TODAY-FOCUSED ALERT BUILDER ----------
 const buildAlertsFromForecast = (forecast) => {
   if (!forecast || forecast.length === 0) return [];
   const alerts = [];
-  const heavyRain = forecast.find((d) => d.rain >= 15);
-  if (heavyRain) alerts.push({ id: 'heavy-rain', icon: 'rainy', title: 'Heavy Rain Expected', description: `Up to ${heavyRain.rain.toFixed(1)}mm expected on ${heavyRain.date}. Delay fertilizer application.`, time: 'Today' });
-  const drySpell = forecast.slice(0, 4).every((d) => d.rain < 0.5);
-  if (drySpell) alerts.push({ id: 'dry-spell', icon: 'sunny', title: 'Dry Days Ahead', description: 'Little to no rainfall expected over the next 4 days. Water your crops regularly.', time: 'Today' });
-  const perfect = forecast.slice(0, 3).filter((d) => d.rain >= 1 && d.rain <= 10 && d.tempMax >= 18 && d.tempMax <= 32);
-  if (perfect.length >= 2) alerts.push({ id: 'perfect', icon: 'sunny', title: 'Perfect Conditions', description: `Ideal for planting over the next ${perfect.length} days. Great time to sow.`, time: 'Today' });
-  if (alerts.length === 0) alerts.push({ id: 'stable', icon: 'sunny', title: 'Stable Weather', description: 'No significant weather events expected in the next few days.', time: 'Today' });
+  const today = forecast[0];
+
+  if (today.rain >= 15) {
+    alerts.push({
+      id: 'heavy-rain',
+      icon: 'rainy',
+      title: 'Heavy Rain Today',
+      description: `Up to ${today.rain.toFixed(1)}mm expected today. Delay fertilizer application.`,
+      time: 'Today',
+      severity: 3,
+      tint: 'rgba(30, 64, 175, 0.78)',
+    });
+  } else if (today.rain >= 5) {
+    alerts.push({
+      id: 'rain-today',
+      icon: 'rainy',
+      title: 'Rain Expected Today',
+      description: `${today.rain.toFixed(1)}mm of rain expected. Good day to skip watering.`,
+      time: 'Today',
+      severity: 1,
+      tint: 'rgba(30, 64, 175, 0.75)',
+    });
+  }
+
+  if (today.rain < 0.5 && today.rainChance < 20) {
+    alerts.push({
+      id: 'dry-today',
+      icon: 'sunny',
+      title: 'Dry Day Today',
+      description: 'No rain expected today. Water your crops in the morning or late afternoon.',
+      time: 'Today',
+      severity: 2,
+      tint: 'rgba(180, 83, 9, 0.78)',
+    });
+  }
+
+  if (today.rain >= 1 && today.rain <= 10 && today.tempMax >= 18 && today.tempMax <= 32 && today.rainChance < 70) {
+    alerts.push({
+      id: 'perfect-today',
+      icon: 'sunny',
+      title: 'Perfect Today',
+      description: 'Ideal conditions for planting or fertilizer application today.',
+      time: 'Today',
+      severity: 1,
+      tint: 'rgba(13, 99, 27, 0.78)',
+    });
+  }
+
+  if (alerts.length === 0) {
+    alerts.push({
+      id: 'stable',
+      icon: 'partly-sunny',
+      title: 'Stable Weather Today',
+      description: `${today.label} today, ${today.tempMax}°/${today.tempMin}°. No urgent action needed.`,
+      time: 'Today',
+      severity: 0,
+      tint: 'rgba(75, 85, 99, 0.78)',
+    });
+  }
+
+  alerts.sort((a, b) => b.severity - a.severity);
   return alerts;
+};
+
+const resolveWeatherCardState = (loading, forecast) => {
+  if (loading) {
+    return {
+      icon: 'cloud-outline',
+      label: "Today's Weather",
+      title: 'Checking weather…',
+      body: 'Fetching your local forecast.',
+      tint: 'rgba(75, 85, 99, 0.78)',
+      count: 0,
+    };
+  }
+
+  if (!forecast || forecast.length === 0) {
+    return {
+      icon: 'cloud-offline-outline',
+      label: "Today's Weather",
+      title: 'Weather Unavailable',
+      body: "Enable location to see today's weather.",
+      tint: 'rgba(75, 85, 99, 0.78)',
+      count: 0,
+    };
+  }
+
+  const alerts = buildAlertsFromForecast(forecast);
+  const top = alerts[0];
+
+  return {
+    icon: top.icon === 'rainy' ? 'rainy-outline' : top.icon === 'sunny' ? 'sunny-outline' : 'partly-sunny-outline',
+    label: "Today's Weather",
+    title: top.title,
+    body: top.description,
+    tint: top.tint,
+    count: alerts.length,
+  };
+};
+
+const isDarkModeSafe = (colors) => colors.text === '#FFFFFF';
+
+// ---------- CROP CARE DETAIL MODAL ----------
+const CropCareDetailModal = ({ visible, tip, onClose, themeColors }) => {
+  if (!tip) return null;
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.modalOverlay}>
+        <View style={[styles.careDetailSheet, { backgroundColor: themeColors.background }]}>
+          <View style={styles.sheetHandle} />
+          <View style={styles.careDetailHeader}>
+            <View style={[styles.careDetailIconWrap, { backgroundColor: 'rgba(13, 99, 27, 0.12)' }]}>
+              <Ionicons name={tip.icon} size={28} color={themeColors.primary} />
+            </View>
+            <Text style={[styles.careDetailTitle, { color: themeColors.text }]}>{tip.title}</Text>
+            <TouchableOpacity
+              style={[styles.modalCloseButton, { backgroundColor: themeColors.surface }]}
+              onPress={onClose}
+            >
+              <Ionicons name="close" size={20} color={themeColors.text} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 24 }}>
+            <Text style={[styles.careDetailSummary, { color: themeColors.text }]}>
+              {tip.description}
+            </Text>
+            <Text style={[styles.careDetailBody, { color: themeColors.textSecondary }]}>
+              {tip.detail}
+            </Text>
+
+            <Text style={[styles.careDetailSectionTitle, { color: themeColors.text }]}>Quick Tips</Text>
+            {(tip.tips || []).map((t, i) => (
+              <View key={i} style={styles.careTipRow}>
+                <Ionicons name="checkmark-circle" size={18} color={themeColors.primary} />
+                <Text style={[styles.careTipText, { color: themeColors.textSecondary }]}>{t}</Text>
+              </View>
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+// ---------- CALENDAR DAY EDIT MODAL ----------
+const DayMarkModal = ({ visible, dateStr, marks, onToggle, onClose, themeColors }) => {
+  if (!dateStr) return null;
+  const current = marks[dateStr] || {};
+  const display = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
+    weekday: 'long', month: 'long', day: 'numeric', year: 'numeric',
+  });
+
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={onClose}>
+        <View style={[styles.dayMarkSheet, { backgroundColor: themeColors.surface }]}>
+          <Text style={[styles.dayMarkTitle, { color: themeColors.text }]}>Mark this day</Text>
+          <Text style={[styles.dayMarkDate, { color: themeColors.textSecondary }]}>{display}</Text>
+
+          <View style={styles.dayMarkGrid}>
+            {Object.entries(MARK_TYPES).map(([key, cfg]) => {
+              const active = !!current[key];
+              return (
+                <TouchableOpacity
+                  key={key}
+                  style={[
+                    styles.dayMarkOption,
+                    { borderColor: themeColors.border, backgroundColor: themeColors.card },
+                    active && { backgroundColor: cfg.color, borderColor: cfg.color },
+                  ]}
+                  onPress={() => onToggle(dateStr, key)}
+                >
+                  <Ionicons name={cfg.icon} size={20} color={active ? '#FFFFFF' : cfg.color} />
+                  <Text style={[styles.dayMarkOptionText, { color: active ? '#FFFFFF' : themeColors.text }]}>
+                    {cfg.label}
+                  </Text>
+                  {active && <Ionicons name="checkmark-circle" size={16} color="#FFFFFF" />}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          <TouchableOpacity
+            style={[styles.dayMarkDone, { backgroundColor: themeColors.primary }]}
+            onPress={onClose}
+          >
+            <Text style={[styles.dayMarkDoneText, { color: themeColors['on-primary'] || '#FFFFFF' }]}>Done</Text>
+          </TouchableOpacity>
+        </View>
+      </TouchableOpacity>
+    </Modal>
+  );
 };
 
 const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => {
   const { themeColors } = useTheme();
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
+  const [marks, setMarks] = useState({});
+  const [dayModalDate, setDayModalDate] = useState(null);
+  const [selectedCareTip, setSelectedCareTip] = useState(null);
 
   const goodPlantingDays = buildGoodPlantingDays(forecast);
   const alerts = buildAlertsFromForecast(forecast);
+
+  useEffect(() => {
+    if (visible) {
+      loadCalendarMarks().then(setMarks);
+    }
+  }, [visible]);
+
+  const toggleMark = async (dateStr, type) => {
+    Haptics.selectionAsync();
+    const next = { ...marks };
+    const dayMarks = { ...(next[dateStr] || {}) };
+    if (dayMarks[type]) delete dayMarks[type];
+    else dayMarks[type] = true;
+
+    if (Object.keys(dayMarks).length === 0) delete next[dateStr];
+    else next[dateStr] = dayMarks;
+
+    setMarks(next);
+    await saveCalendarMarks(next);
+  };
 
   const changeMonth = (delta) => {
     let newMonth = currentMonth + delta;
@@ -160,9 +432,9 @@ const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => 
     const today = new Date();
     const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
     const firstDayOfWeek = new Date(currentYear, currentMonth, 1).getDay();
-    const days = [];
+    const cells = [];
 
-    for (let i = 0; i < firstDayOfWeek; i++) days.push(<View key={`empty-${i}`} style={styles.calendarDayEmpty} />);
+    for (let i = 0; i < firstDayOfWeek; i++) cells.push(<View key={`empty-${i}`} style={styles.calendarDayEmpty} />);
 
     for (let day = 1; day <= daysInMonth; day++) {
       const dateObj = new Date(currentYear, currentMonth, day);
@@ -171,17 +443,46 @@ const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => 
       const isGoodDay = goodPlantingDays[dateStr] === true;
       const dayOfWeek = dateObj.getDay();
       const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const dayMarks = marks[dateStr] || {};
+      const markKeys = Object.keys(dayMarks);
 
-      days.push(
-        <View key={day} style={[styles.calendarDay, isToday && styles.calendarDayToday, !isToday && isGoodDay && styles.calendarDayGood]}>
-          <Text style={[styles.calendarDayText, { color: themeColors.text }, isToday && styles.calendarDayTextToday, !isToday && isGoodDay && styles.calendarDayTextGood, !isToday && !isGoodDay && isWeekend && styles.calendarDayTextWeekend]}>
+      cells.push(
+        <TouchableOpacity
+          key={day}
+          activeOpacity={0.7}
+          onPress={() => {
+            Haptics.selectionAsync();
+            setDayModalDate(dateStr);
+          }}
+          style={[
+            styles.calendarDay,
+            isToday && styles.calendarDayToday,
+            !isToday && isGoodDay && styles.calendarDayGood,
+          ]}
+        >
+          <Text
+            style={[
+              styles.calendarDayText,
+              { color: themeColors.text },
+              isToday && styles.calendarDayTextToday,
+              !isToday && isGoodDay && styles.calendarDayTextGood,
+              !isToday && !isGoodDay && isWeekend && styles.calendarDayTextWeekend,
+            ]}
+          >
             {day}
           </Text>
-          {isGoodDay && !isToday && <View style={styles.calendarDot} />}
-        </View>
+          {markKeys.length > 0 && (
+            <View style={styles.markDotRow}>
+              {markKeys.slice(0, 3).map((k) => (
+                <View key={k} style={[styles.markDot, { backgroundColor: MARK_TYPES[k]?.color || '#666' }]} />
+              ))}
+            </View>
+          )}
+          {isGoodDay && markKeys.length === 0 && <View style={styles.calendarDot} />}
+        </TouchableOpacity>
       );
     }
-    return days;
+    return cells;
   };
 
   const currentWeatherIcon = weather?.icon || 'sunny';
@@ -223,6 +524,9 @@ const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => 
                 <Text style={[styles.calendarTitle, { color: themeColors.text }]}>{MONTHS[currentMonth]} {currentYear}</Text>
                 <TouchableOpacity onPress={() => changeMonth(1)}><Ionicons name="chevron-forward" size={20} color={themeColors.text} /></TouchableOpacity>
               </View>
+              <Text style={[styles.calendarHint, { color: themeColors.textSecondary }]}>
+                Tap any date to mark planting, watering, harvest, or rain.
+              </Text>
               <View style={styles.calendarGrid}>
                 {['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].map((day) => (
                   <View key={day} style={styles.calendarDayHeader}>
@@ -231,9 +535,20 @@ const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => 
                 ))}
                 {renderCalendar()}
               </View>
-              <View style={[styles.calendarLegend, { borderTopColor: themeColors.border }]}>
-                <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendGood]} /><Text style={[styles.legendText, { color: themeColors.textSecondary }]}>Good Planting Day</Text></View>
-                <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendToday]} /><Text style={[styles.legendText, { color: themeColors.textSecondary }]}>Today</Text></View>
+
+              <View style={[styles.calendarLegendWrap, { borderTopColor: themeColors.border }]}>
+                <View style={styles.calendarLegend}>
+                  <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendGood]} /><Text style={[styles.legendText, { color: themeColors.textSecondary }]}>Good Planting Day</Text></View>
+                  <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendToday]} /><Text style={[styles.legendText, { color: themeColors.textSecondary }]}>Today</Text></View>
+                </View>
+                <View style={styles.calendarLegend}>
+                  {Object.entries(MARK_TYPES).map(([key, cfg]) => (
+                    <View key={key} style={styles.legendItem}>
+                      <View style={[styles.legendDot, { backgroundColor: cfg.color }]} />
+                      <Text style={[styles.legendText, { color: themeColors.textSecondary }]}>{cfg.label}</Text>
+                    </View>
+                  ))}
+                </View>
               </View>
             </View>
 
@@ -250,23 +565,42 @@ const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => 
 
             <View style={styles.sectionContainer}>
               <View style={styles.sectionHeader}><Ionicons name="leaf-outline" size={22} color={themeColors.primary} /><Text style={[styles.sectionTitle, { color: themeColors.text }]}>Root Crop Care Guide</Text></View>
+              <Text style={[styles.sectionHint, { color: themeColors.textSecondary }]}>
+                Tap a card for detailed instructions.
+              </Text>
               <View style={styles.careGrid}>
                 {cropCareTips.map((tip) => (
-                  <View key={tip.id} style={[styles.careCard, { backgroundColor: themeColors.card }]}>
-                    <View style={styles.careIconContainer}><Ionicons name={tip.icon} size={24} color={themeColors.primary} /></View>
+                  <TouchableOpacity
+                    key={tip.id}
+                    style={[styles.careCard, { backgroundColor: themeColors.card }]}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      setSelectedCareTip(tip);
+                    }}
+                    activeOpacity={0.75}
+                  >
+                    <View style={styles.careIconContainer}>
+                      <Ionicons name={tip.icon} size={24} color={themeColors.primary} />
+                    </View>
                     <Text style={[styles.careTitle, { color: themeColors.text }]}>{tip.title}</Text>
-                    <Text style={[styles.careDescription, { color: themeColors.textSecondary }]}>{tip.description}</Text>
-                  </View>
+                    <Text style={[styles.careDescription, { color: themeColors.textSecondary }]} numberOfLines={2}>
+                      {tip.description}
+                    </Text>
+                    <View style={styles.careReadMore}>
+                      <Text style={[styles.careReadMoreText, { color: themeColors.primary }]}>Read more</Text>
+                      <Ionicons name="chevron-forward" size={14} color={themeColors.primary} />
+                    </View>
+                  </TouchableOpacity>
                 ))}
               </View>
             </View>
 
             <View style={styles.sectionContainer}>
-              <View style={styles.sectionHeader}><Ionicons name="warning-outline" size={22} color="#F97316" /><Text style={[styles.sectionTitle, { color: themeColors.text }]}>Weather Alerts</Text></View>
+              <View style={styles.sectionHeader}><Ionicons name="warning-outline" size={22} color="#F97316" /><Text style={[styles.sectionTitle, { color: themeColors.text }]}>Today's Alerts</Text></View>
               {alerts.map((alert) => (
                 <View key={alert.id} style={[styles.alertItem, { backgroundColor: themeColors.card }]}>
                   <View style={[styles.alertIconContainer, { backgroundColor: isDarkModeSafe(themeColors) ? 'rgba(136,217,130,0.15)' : 'rgba(13,99,27,0.1)' }]}>
-                    <Ionicons name={alert.icon === 'rainy' ? 'rainy-outline' : 'sunny-outline'} size={24} color={themeColors.primary} />
+                    <Ionicons name={alert.icon === 'rainy' ? 'rainy-outline' : alert.icon === 'sunny' ? 'sunny-outline' : 'partly-sunny-outline'} size={24} color={themeColors.primary} />
                   </View>
                   <View style={styles.alertContent}>
                     <Text style={[styles.alertTitle, { color: themeColors.text }]}>{alert.title}</Text>
@@ -279,11 +613,25 @@ const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => 
           </ScrollView>
         </View>
       </View>
+
+      <DayMarkModal
+        visible={!!dayModalDate}
+        dateStr={dayModalDate}
+        marks={marks}
+        onToggle={toggleMark}
+        onClose={() => setDayModalDate(null)}
+        themeColors={themeColors}
+      />
+
+      <CropCareDetailModal
+        visible={!!selectedCareTip}
+        tip={selectedCareTip}
+        onClose={() => setSelectedCareTip(null)}
+        themeColors={themeColors}
+      />
     </Modal>
   );
 };
-
-const isDarkModeSafe = (colors) => colors.text === '#FFFFFF';
 
 const notificationIcon = (type) => {
   switch (type) {
@@ -616,20 +964,7 @@ const HomeScreen = ({ navigation }) => {
   const currentWeatherLabel = weather?.label || 'Sunny';
   const currentWeatherTemp = weather ? `${weather.temp}°C` : '28°C';
 
-  const weatherAlertSummary = (() => {
-    if (!forecast || forecast.length === 0) {
-      return { title: 'Perfect Conditions', body: 'Ideal for fertilizer application today.' };
-    }
-    const heavyRain = forecast.find((d) => d.rain >= 15);
-    if (heavyRain) {
-      return { title: 'Heavy Rain Soon', body: 'Delay fertilizer application for a few days.' };
-    }
-    const drySpell = forecast.slice(0, 4).every((d) => d.rain < 0.5);
-    if (drySpell) {
-      return { title: 'Dry Days Ahead', body: 'Water your crops regularly this week.' };
-    }
-    return { title: 'Perfect Conditions', body: 'Ideal for fertilizer application today.' };
-  })();
+  const weatherCard = resolveWeatherCardState(weatherLoading, forecast);
 
   const hasActivity = !!lastScan || savedScans.length > 0;
   const scanTime = (row) => row?.captured_at || row?.created_at;
@@ -798,16 +1133,25 @@ const HomeScreen = ({ navigation }) => {
             activeOpacity={0.8}
           >
             <ImageBackground source={alertsImage} style={[styles.bentoCard, styles.weatherAlertCard]} imageStyle={styles.bentoCardImage} resizeMode="cover">
-              <View style={styles.weatherAlertOverlay}>
+              <View style={[styles.weatherAlertOverlay, { backgroundColor: weatherCard.tint }]}>
                 <View style={styles.bentoCardHeader}>
                   <View style={styles.weatherAlertIconContainer}>
-                    <Ionicons name="cloud-done-outline" size={18} color="#FFF8F6" />
+                    <Ionicons name={weatherCard.icon} size={18} color="#FFF8F6" />
                   </View>
+                  {weatherCard.count > 1 && (
+                    <View style={styles.alertCountBadge}>
+                      <Text style={styles.alertCountBadgeText}>{weatherCard.count}</Text>
+                    </View>
+                  )}
                 </View>
                 <View style={styles.bentoCardFooter}>
-                  <Text style={styles.weatherAlertLabel}>Weather Alerts</Text>
-                  <Text style={styles.weatherAlertValue}>{weatherAlertSummary.title}</Text>
-                  <Text style={styles.bentoDescription}>{weatherAlertSummary.body}</Text>
+                  <Text style={styles.weatherAlertLabel}>{weatherCard.label}</Text>
+                  <Text style={styles.weatherAlertValue} numberOfLines={1}>
+                    {weatherCard.title}
+                  </Text>
+                  <Text style={styles.bentoDescription} numberOfLines={2}>
+                    {weatherCard.body}
+                  </Text>
                 </View>
               </View>
             </ImageBackground>
@@ -954,10 +1298,12 @@ const styles = StyleSheet.create({
   bentoCardWrapper: { flex: 1, borderRadius: 16, overflow: 'hidden', shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.05, shadowRadius: 8, elevation: 2 },
   bentoCard: { flex: 1, minHeight: 110, justifyContent: 'center' },
   bentoCardImage: { borderRadius: 16 },
-  weatherAlertOverlay: { flex: 1, padding: 14, justifyContent: 'space-between', backgroundColor: 'rgba(152, 98, 0, 0.75)' },
+  weatherAlertOverlay: { flex: 1, padding: 14, justifyContent: 'space-between' },
   weatherAlertCard: { backgroundColor: 'transparent' },
   bentoCardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   weatherAlertIconContainer: { width: 32, height: 32, borderRadius: 8, backgroundColor: 'rgba(255, 248, 246, 0.2)', justifyContent: 'center', alignItems: 'center' },
+  alertCountBadge: { minWidth: 22, height: 22, paddingHorizontal: 6, borderRadius: 11, backgroundColor: 'rgba(255, 248, 246, 0.25)', borderWidth: 1, borderColor: 'rgba(255, 248, 246, 0.4)', alignItems: 'center', justifyContent: 'center' },
+  alertCountBadgeText: { color: '#FFFFFF', fontSize: 11, fontWeight: '700' },
   bentoCardFooter: { gap: 1 },
   weatherAlertLabel: { fontSize: 11, fontWeight: '600', color: 'rgba(255, 248, 246, 0.85)' },
   weatherAlertValue: { fontSize: 15, fontWeight: '600', color: '#FFFFFF' },
@@ -1000,12 +1346,13 @@ const styles = StyleSheet.create({
   weatherSummaryLabel: { fontSize: 12, fontWeight: '400' },
   weatherSummaryValue: { fontSize: 16, fontWeight: '600' },
   calendarSection: { borderRadius: 16, padding: 16, marginBottom: 16 },
-  calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
+  calendarHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   calendarTitle: { fontSize: 16, fontWeight: '600' },
+  calendarHint: { fontSize: 12, marginBottom: 10, fontStyle: 'italic' },
   calendarGrid: { flexDirection: 'row', flexWrap: 'wrap' },
   calendarDayHeader: { width: '14.28%', alignItems: 'center', paddingVertical: 4 },
   calendarDayHeaderText: { fontSize: 11, fontWeight: '600' },
-  calendarDay: { width: '14.28%', alignItems: 'center', paddingVertical: 6, borderRadius: 20, position: 'relative' },
+  calendarDay: { width: '14.28%', alignItems: 'center', paddingVertical: 6, borderRadius: 20, position: 'relative', minHeight: 40 },
   calendarDayEmpty: { width: '14.28%', paddingVertical: 6 },
   calendarDayToday: { backgroundColor: '#0D631B' },
   calendarDayGood: { backgroundColor: 'rgba(13, 99, 27, 0.1)' },
@@ -1013,16 +1360,20 @@ const styles = StyleSheet.create({
   calendarDayTextToday: { color: '#FFFFFF', fontWeight: '700' },
   calendarDayTextWeekend: { color: '#DC2626' },
   calendarDayTextGood: { color: '#0D631B', fontWeight: '600' },
-  calendarDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#0D631B', position: 'absolute', bottom: 0 },
-  calendarLegend: { flexDirection: 'row', justifyContent: 'center', gap: 16, marginTop: 8, paddingTop: 8, borderTopWidth: 1 },
+  calendarDot: { width: 4, height: 4, borderRadius: 2, backgroundColor: '#0D631B', position: 'absolute', bottom: 3 },
+  markDotRow: { flexDirection: 'row', gap: 3, position: 'absolute', bottom: 3 },
+  markDot: { width: 5, height: 5, borderRadius: 2.5 },
+  calendarLegendWrap: { marginTop: 10, paddingTop: 10, borderTopWidth: 1, gap: 8 },
+  calendarLegend: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 14 },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   legendDot: { width: 10, height: 10, borderRadius: 5 },
   legendGood: { backgroundColor: 'rgba(13, 99, 27, 0.3)' },
   legendToday: { backgroundColor: '#0D631B' },
   legendText: { fontSize: 11 },
   sectionContainer: { marginBottom: 16 },
-  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
   sectionTitle: { fontSize: 16, fontWeight: '600' },
+  sectionHint: { fontSize: 12, marginBottom: 10, fontStyle: 'italic' },
   tipCard: { borderRadius: 12, padding: 14, marginBottom: 8 },
   tipTitle: { fontSize: 14, fontWeight: '600', marginBottom: 4 },
   tipDescription: { fontSize: 13, marginBottom: 6, lineHeight: 18 },
@@ -1032,7 +1383,9 @@ const styles = StyleSheet.create({
   careCard: { borderRadius: 12, padding: 14, width: '48%' },
   careIconContainer: { width: 40, height: 40, borderRadius: 20, backgroundColor: 'rgba(13, 99, 27, 0.1)', alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
   careTitle: { fontSize: 13, fontWeight: '600', marginBottom: 4 },
-  careDescription: { fontSize: 11, lineHeight: 16 },
+  careDescription: { fontSize: 11, lineHeight: 16, marginBottom: 6 },
+  careReadMore: { flexDirection: 'row', alignItems: 'center', gap: 2 },
+  careReadMoreText: { fontSize: 11, fontWeight: '600' },
   alertItem: { flexDirection: 'row', borderRadius: 12, padding: 14, marginBottom: 8, gap: 12 },
   alertIconContainer: { width: 44, height: 44, borderRadius: 22, justifyContent: 'center', alignItems: 'center' },
   alertContent: { flex: 1 },
@@ -1040,6 +1393,28 @@ const styles = StyleSheet.create({
   alertDescription: { fontSize: 13, marginBottom: 4 },
   alertTime: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   alertTimeText: { fontSize: 11 },
+
+  // Crop care detail sheet
+  sheetHandle: { width: 40, height: 4, borderRadius: 2, backgroundColor: '#CCC', alignSelf: 'center', marginBottom: 12 },
+  careDetailSheet: { borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20, maxHeight: '85%' },
+  careDetailHeader: { flexDirection: 'row', alignItems: 'center', gap: 12, marginBottom: 16 },
+  careDetailIconWrap: { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center' },
+  careDetailTitle: { fontSize: 20, fontWeight: '700', flex: 1 },
+  careDetailSummary: { fontSize: 15, fontWeight: '600', marginBottom: 8 },
+  careDetailBody: { fontSize: 14, lineHeight: 21, marginBottom: 20 },
+  careDetailSectionTitle: { fontSize: 14, fontWeight: '700', marginBottom: 10 },
+  careTipRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 },
+  careTipText: { fontSize: 13, flex: 1, lineHeight: 18 },
+
+  // Day mark modal
+  dayMarkSheet: { margin: 20, borderRadius: 20, padding: 20, marginBottom: 80 },
+  dayMarkTitle: { fontSize: 18, fontWeight: '700', textAlign: 'center' },
+  dayMarkDate: { fontSize: 13, textAlign: 'center', marginTop: 4, marginBottom: 16 },
+  dayMarkGrid: { gap: 10, marginBottom: 16 },
+  dayMarkOption: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 14, borderRadius: 12, borderWidth: 1.5 },
+  dayMarkOptionText: { fontSize: 15, fontWeight: '600', flex: 1 },
+  dayMarkDone: { paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
+  dayMarkDoneText: { fontSize: 15, fontWeight: '700' },
 });
 
 export default HomeScreen;
