@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Audit from './Audit';
+import Backup from './Backup';
 import Badge from '../components/Badge';
 import Icon from '../components/Icon';
 import { useConfirm } from '../components/ConfirmDialog';
@@ -197,11 +198,12 @@ function MaintenancePanel() {
 const TABS = [
   { key: 'mode', label: 'Maintenance mode' },
   { key: 'audit', label: 'Audit Log' },
+  { key: 'backup', label: 'Backup' },
 ];
 
 export default function Maintenance() {
   const [params, setParams] = useSearchParams();
-  const tab = params.get('tab') === 'audit' ? 'audit' : 'mode';
+  const tab = ['audit', 'backup'].includes(params.get('tab')) ? params.get('tab') : 'mode';
 
   return (
     <div className="stack-lg">
@@ -217,7 +219,9 @@ export default function Maintenance() {
         ))}
       </div>
 
-      {tab === 'mode' ? <MaintenancePanel /> : <Audit />}
+      {tab === 'mode' && <MaintenancePanel />}
+      {tab === 'audit' && <Audit />}
+      {tab === 'backup' && <Backup />}
     </div>
   );
 }

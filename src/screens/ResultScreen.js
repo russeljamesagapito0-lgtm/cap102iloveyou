@@ -97,10 +97,15 @@ const ResultScreen = ({ route, navigation }) => {
         is_saved: true,
         is_archived: false,
         is_deleted: false,
+        disease_code: DISEASE_INFO[diseaseKey] ? diseaseKey : null,
         disease_name: diseaseData.name,
         disease_type: diseaseType,
         severity: diseaseSeverity,
         accuracy: diseaseAccuracy,
+        // Admin panel reads `confidence` as a 0..1 value
+        confidence: diseaseAccuracy != null && Number.isFinite(diseaseAccuracy)
+          ? Math.min(Math.max(diseaseAccuracy / 100, 0), 1)
+          : null,
         description: diseaseData.description || null,
         treatment: diseaseData.treatment || null,
         prevention: diseaseData.prevention || null,

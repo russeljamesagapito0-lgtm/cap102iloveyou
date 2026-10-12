@@ -188,7 +188,10 @@ const processCreateScan = async (mutation, userId) => {
       user_id: userId,
       crop_type: cropType,
       image_path: imagePath,
-      captured_at: capturedAt || new Date().toISOString()
+      captured_at: capturedAt || new Date().toISOString(),
+      // Admin panel reads these two columns (confidence is 0..1)
+      disease_code: diagnosisCode || null,
+      confidence: typeof confidence === 'number' ? Math.min(Math.max(confidence / 100, 0), 1) : null
     });
 
   if (scanError) throw scanError;
