@@ -88,12 +88,28 @@ const LoginScreen = ({ navigation }) => {
       return showModal('Invalid Email', 'Please enter a valid email address.', 'warning');
     }
 
+    const cleanEmail = email.trim().toLowerCase();
+
+    // ============================================================
+    // DEV DEMO BYPASS — remove once backend is wired.
+    // Typing this email jumps straight to the reactivation screen
+    // so you can preview the flow without a real deactivated account.
+    // ============================================================
+    if (cleanEmail === 'deactivated@rootcare.farm') {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+      navigation.replace('ReactivateAccount', {
+        deactivatedAt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString(),
+        scheduledDeletionAt: new Date(Date.now() + 23 * 24 * 60 * 60 * 1000).toISOString(),
+      });
+      return;
+    }
+
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setIsLoading(true);
 
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
-        email: email.trim(), password,
+        email: cleanEmail, password,
       });
 
       if (error) {
@@ -103,6 +119,24 @@ const LoginScreen = ({ navigation }) => {
         else if (error.message.includes('Email not confirmed')) message = 'Please confirm your email address before logging in.';
         return showModal('Error', message, 'error');
       }
+
+      // ============================================================
+      // TODO: replace with real deactivation check once backend is ready:
+      //
+      //   const { data: profile } = await supabase
+      //     .from('profiles')
+      //     .select('deactivated_at, scheduled_deletion_at')
+      //     .eq('id', data.user.id)
+      //     .maybeSingle();
+      //
+      //   if (profile?.deactivated_at) {
+      //     navigation.replace('ReactivateAccount', {
+      //       deactivatedAt: profile.deactivated_at,
+      //       scheduledDeletionAt: profile.scheduled_deletion_at,
+      //     });
+      //     return;
+      //   }
+      // ============================================================
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       showModal('Welcome Back! ', 'You have successfully logged in to RootCare.', 'success', () => navigation.replace('MainTabs'));

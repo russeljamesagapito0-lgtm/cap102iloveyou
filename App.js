@@ -17,6 +17,7 @@ import MainTabs from './src/navigation/MainTabs';
 import ScannerScreen from './src/screens/ScannerScreen';
 import ResultScreen from './src/screens/ResultScreen';
 import MaintenanceScreen from './src/screens/MaintenanceScreen';
+import ReactivateAccountScreen from './src/screens/ReactivateAccountScreen';
 import { fetchMaintenance, DEFAULT_MAINTENANCE } from './src/utils/appConfig';
 
 import { loadOfflineModel } from './src/utils/offlineInference';
@@ -39,7 +40,6 @@ const AppNavigator = () => {
     setMaintenanceChecked(true);
   }, []);
 
-  // Check on launch, every 30s while open, and whenever the app returns to the foreground.
   useEffect(() => {
     refreshMaintenance();
     const interval = setInterval(refreshMaintenance, MAINTENANCE_POLL_MS);
@@ -160,6 +160,7 @@ const AppNavigator = () => {
         <Stack.Screen name="MainTabs" component={MainTabs} />
         <Stack.Screen name="Scanner" component={ScannerScreen} />
         <Stack.Screen name="Result" component={ResultScreen} />
+        <Stack.Screen name="ReactivateAccount" component={ReactivateAccountScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );
