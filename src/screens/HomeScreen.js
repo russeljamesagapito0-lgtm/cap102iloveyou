@@ -285,7 +285,6 @@ const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => 
 
 const isDarkModeSafe = (colors) => colors.text === '#FFFFFF';
 
-// ============ NOTIFICATION ICONS ============
 const notificationIcon = (type) => {
   switch (type) {
     case 'profile_updated': return { name: 'person-circle-outline', color: '#0D631B' };
@@ -296,7 +295,6 @@ const notificationIcon = (type) => {
   }
 };
 
-// ============ NOTIFICATIONS MODAL ============
 const NotificationsModal = ({ visible, onClose, items, loading, onMarkAllRead }) => {
   const { themeColors } = useTheme();
 
@@ -385,7 +383,6 @@ const HomeScreen = ({ navigation }) => {
   const [savedScans, setSavedScans] = useState([]);
   const [activityLoading, setActivityLoading] = useState(true);
 
-  // Notifications
   const [notifications, setNotifications] = useState([]);
   const [notifLoading, setNotifLoading] = useState(true);
   const unreadCount = notifications.filter((n) => !n.is_read).length;
@@ -696,21 +693,34 @@ const HomeScreen = ({ navigation }) => {
             </View>
           </View>
 
-          <TouchableOpacity
-            style={styles.notificationButton}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setNotificationsModalVisible(true);
-            }}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="notifications-outline" size={24} color={themeColors.primary} />
-            {unreadCount > 0 && (
-              <View style={styles.badge}>
-                <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
-              </View>
-            )}
-          </TouchableOpacity>
+          <View style={styles.headerRightActions}>
+            <TouchableOpacity
+              style={styles.notificationButton}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                navigation.navigate('Settings');
+              }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="settings-outline" size={24} color={themeColors.primary} />
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.notificationButton}
+              onPress={() => {
+                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                setNotificationsModalVisible(true);
+              }}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="notifications-outline" size={24} color={themeColors.primary} />
+              {unreadCount > 0 && (
+                <View style={styles.badge}>
+                  <Text style={styles.badgeText}>{unreadCount > 99 ? '99+' : unreadCount}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
+          </View>
         </View>
       </View>
 
@@ -804,7 +814,6 @@ const HomeScreen = ({ navigation }) => {
           </TouchableOpacity>
         </View>
 
-        {/* Recent Activity */}
         <View style={styles.activitySection}>
           <View style={styles.activityHeader}>
             <Text style={[styles.activityTitle, { color: themeColors.text }]}>
@@ -913,6 +922,7 @@ const styles = StyleSheet.create({
   header: { width: '100%', paddingHorizontal: 16, paddingVertical: 10, borderBottomWidth: 1 },
   headerContent: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  headerRightActions: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   avatarContainer: { width: 36, height: 36, borderRadius: 18, overflow: 'hidden', justifyContent: 'center', alignItems: 'center' },
   avatar: { width: '100%', height: '100%' },
   headerTextContainer: { flexDirection: 'column' },

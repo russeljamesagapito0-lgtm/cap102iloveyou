@@ -6,6 +6,7 @@ import HomeScreen from '../screens/HomeScreen';
 import ChatbotScreen from '../screens/ChatbotScreen';
 import ScannerStack from './ScannerStack';
 import HistoryScreen from '../screens/ScanHistory';
+import AnalyticsScreen from '../screens/AnalyticsScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 
 const Tab = createBottomTabNavigator();
@@ -15,6 +16,7 @@ export default function MainTabs() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false }}>
       <Stack.Screen name="RootTabs" component={TabNavigator} />
+      <Stack.Screen name="Settings" component={SettingsScreen} />
     </Stack.Navigator>
   );
 }
@@ -33,11 +35,7 @@ function TabNavigator() {
         options={{ tabBarStyle: { display: 'none' } }}
       />
       <Tab.Screen name="History" component={HistoryScreen} />
-      <Tab.Screen
-        name="Settings"
-        component={SettingsScreen}
-        options={{ tabBarStyle: { display: 'none' } }}
-      />
+      <Tab.Screen name="Analytics" component={AnalyticsScreen} />
     </Tab.Navigator>
   );
 }

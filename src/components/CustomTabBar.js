@@ -3,7 +3,6 @@ import { View, TouchableOpacity, Text, StyleSheet, Platform } from 'react-native
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 
-const BOTTOM_BAR_HEIGHT = 72;
 const FAB_SIZE = 64;
 
 export default function CustomTabBar({ state, navigation, descriptors }) {
@@ -14,8 +13,7 @@ export default function CustomTabBar({ state, navigation, descriptors }) {
     Chatbot: { icon: 'chatbubble-ellipses-outline', activeIcon: 'chatbubble-ellipses', label: 'Ask AI' },
     Scanner: { icon: 'scan-outline', activeIcon: 'scan', label: 'Scan Leaves', isCenter: true },
     History: { icon: 'time-outline', activeIcon: 'time', label: 'Scan History' },
-    Settings: { icon: 'settings-outline', activeIcon: 'settings', label: 'Settings' },
-    Marketplace: { icon: 'storefront-outline', activeIcon: 'storefront', label: 'Marketplace', hidden: true },
+    Analytics: { icon: 'analytics-outline', activeIcon: 'analytics', label: 'Analytics' },
   };
 
   const currentRoute = state.routes[state.index];
@@ -40,7 +38,7 @@ export default function CustomTabBar({ state, navigation, descriptors }) {
         const isFocused = state.index === index;
         const config = routeConfig[route.name];
 
-        if (!config || config.hidden) return null;
+        if (!config) return null;
 
         const activeColor = themeColors.primary;
         const inactiveColor = themeColors.textSecondary;
@@ -87,6 +85,7 @@ export default function CustomTabBar({ state, navigation, descriptors }) {
                 { color: isFocused ? activeColor : inactiveColor },
                 isFocused && styles.tabLabelActive,
               ]}
+              numberOfLines={1}
             >
               {config.label}
             </Text>
