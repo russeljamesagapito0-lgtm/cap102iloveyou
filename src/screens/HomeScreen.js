@@ -9,10 +9,11 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as Location from 'expo-location';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import Toast from 'react-native-toast-message';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../utils/supabaseClient';
 import { useTheme } from '../context/ThemeContext';
-import { markAllNotificationsRead } from '../utils/notifications';
+import { markAllNotificationsRead, pushNotification } from '../utils/notifications';
 
 const MONTHS = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -77,6 +78,9 @@ const MARK_TYPES = {
   rain:    { label: 'Rain',    color: '#0EA5E9', icon: 'rainy' },
 };
 
+// Display order for notification body, regardless of toggle order
+const MARK_ORDER = ['plant', 'water', 'harvest', 'rain'];
+
 const loadCalendarMarks = async () => {
   try {
     const raw = await AsyncStorage.getItem(CALENDAR_MARK_KEY);
@@ -91,6 +95,49 @@ const saveCalendarMarks = async (marks) => {
     await AsyncStorage.setItem(CALENDAR_MARK_KEY, JSON.stringify(marks));
   } catch (e) {
     console.warn('Failed to save calendar marks:', e.message);
+  }
+};
+
+// ---------- CALENDAR MARK NOTIFICATION ----------
+// Fires when the user toggles marks on/off. Writes to the notifications
+// table (bell icon) AND shows a toast. One combined notification per
+// day, listing all marks currently active on that day.
+const notifyCalendarMarks = async (dateStr, activeKeys) => {
+  const display = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
+    month: 'short', day: 'numeric',
+  });
+
+  const ordered = MARK_ORDER.filter((k) => activeKeys.includes(k));
+  const labels = ordered.map((k) => MARK_TYPES[k].label).join(', ');
+
+  let title;
+  let body;
+
+  if (ordered.length === 0) {
+    title = 'Marks cleared';
+    body = `${display} has no crop marks anymore.`;
+  } else {
+    title = `${display} marked`;
+    body = ordered.length === 1
+      ? `${display} marked: ${labels}`
+      : `${display} marked: ${labels}`;
+  }
+
+  Toast.show({
+    type: 'success',
+    text1: title,
+    text2: body,
+    visibilityTime: 2000,
+  });
+
+  try {
+    await pushNotification({
+      type: 'calendar_mark',
+      title,
+      body,
+    });
+  } catch (e) {
+    console.warn('Calendar notification failed:', e?.message);
   }
 };
 
@@ -178,45 +225,78 @@ const fetchWeatherData = async () => {
   };
 };
 
-const buildGoodPlantingDays = (forecast) => {
-  if (!forecast) return {};
-  const map = {};
-  forecast.forEach((day) => {
-    const good = day.rain >= 1 && day.rain <= 15 && day.tempMax >= 18 && day.tempMax <= 32 && day.rainChance < 80;
-    map[day.date] = good;
-  });
-  return map;
+// ---------- GOOD PLANTING DAY (today only, real-time) ----------
+const buildGoodPlantingDays = (weather, forecast) => {
+  if (!weather && (!forecast || forecast.length === 0)) return {};
+
+  const today = forecast?.[0];
+  const todayKey = today?.date;
+  if (!todayKey) return {};
+
+  const temp = typeof weather?.temp === 'number' ? weather.temp : today?.tempMax;
+  const tempOk = typeof temp === 'number' && temp >= 18 && temp <= 32;
+
+  const rain = typeof today?.rain === 'number' ? today.rain : 0;
+  const rainOk = rain >= 1 && rain <= 15;
+
+  const rainChance = typeof today?.rainChance === 'number' ? today.rainChance : 0;
+  const chanceOk = rainChance < 80;
+
+  const condition = (weather?.condition || today?.condition || '').toLowerCase();
+  const conditionOk = !condition.includes('thunder') && !condition.includes('storm');
+
+  const good = tempOk && rainOk && chanceOk && conditionOk;
+
+  return { [todayKey]: good };
 };
 
-// ---------- TODAY-FOCUSED ALERT BUILDER ----------
-const buildAlertsFromForecast = (forecast) => {
-  if (!forecast || forecast.length === 0) return [];
+// ---------- TODAY-FOCUSED ALERT BUILDER (real-time) ----------
+const buildAlertsFromForecast = (weather, forecast) => {
+  if (!weather && (!forecast || forecast.length === 0)) return [];
   const alerts = [];
-  const today = forecast[0];
+  const today = forecast?.[0] || {};
 
-  if (today.rain >= 15) {
+  const rain = typeof today.rain === 'number' ? today.rain : 0;
+  const rainChance = typeof today.rainChance === 'number' ? today.rainChance : 0;
+  const tempMax = typeof today.tempMax === 'number' ? today.tempMax : weather?.temp;
+  const tempMin = typeof today.tempMin === 'number' ? today.tempMin : weather?.temp;
+
+  const condition = (weather?.condition || today.condition || '').toLowerCase();
+  const isStormy = condition.includes('thunder') || condition.includes('storm');
+
+  if (isStormy) {
+    alerts.push({
+      id: 'storm',
+      icon: 'rainy',
+      title: 'Thunderstorm Now',
+      description: 'Stormy conditions outside. Avoid field work for now.',
+      time: 'Now',
+      severity: 3,
+      tint: 'rgba(30, 64, 175, 0.78)',
+    });
+  } else if (rain >= 15) {
     alerts.push({
       id: 'heavy-rain',
       icon: 'rainy',
       title: 'Heavy Rain Today',
-      description: `Up to ${today.rain.toFixed(1)}mm expected today. Delay fertilizer application.`,
+      description: `Up to ${rain.toFixed(1)}mm expected today. Delay fertilizer application.`,
       time: 'Today',
       severity: 3,
       tint: 'rgba(30, 64, 175, 0.78)',
     });
-  } else if (today.rain >= 5) {
+  } else if (rain >= 5) {
     alerts.push({
       id: 'rain-today',
       icon: 'rainy',
       title: 'Rain Expected Today',
-      description: `${today.rain.toFixed(1)}mm of rain expected. Good day to skip watering.`,
+      description: `${rain.toFixed(1)}mm of rain expected. Good day to skip watering.`,
       time: 'Today',
       severity: 1,
       tint: 'rgba(30, 64, 175, 0.75)',
     });
   }
 
-  if (today.rain < 0.5 && today.rainChance < 20) {
+  if (rain < 0.5 && rainChance < 20) {
     alerts.push({
       id: 'dry-today',
       icon: 'sunny',
@@ -228,7 +308,15 @@ const buildAlertsFromForecast = (forecast) => {
     });
   }
 
-  if (today.rain >= 1 && today.rain <= 10 && today.tempMax >= 18 && today.tempMax <= 32 && today.rainChance < 70) {
+  if (
+    !isStormy &&
+    rain >= 1 &&
+    rain <= 10 &&
+    typeof tempMax === 'number' &&
+    tempMax >= 18 &&
+    tempMax <= 32 &&
+    rainChance < 70
+  ) {
     alerts.push({
       id: 'perfect-today',
       icon: 'sunny',
@@ -245,7 +333,7 @@ const buildAlertsFromForecast = (forecast) => {
       id: 'stable',
       icon: 'partly-sunny',
       title: 'Stable Weather Today',
-      description: `${today.label} today, ${today.tempMax}°/${today.tempMin}°. No urgent action needed.`,
+      description: `${weather?.label || today.label || 'Clear'} today, ${tempMax}°/${tempMin}°. No urgent action needed.`,
       time: 'Today',
       severity: 0,
       tint: 'rgba(75, 85, 99, 0.78)',
@@ -256,7 +344,7 @@ const buildAlertsFromForecast = (forecast) => {
   return alerts;
 };
 
-const resolveWeatherCardState = (loading, forecast) => {
+const resolveWeatherCardState = (loading, weather, forecast) => {
   if (loading) {
     return {
       icon: 'cloud-outline',
@@ -268,7 +356,7 @@ const resolveWeatherCardState = (loading, forecast) => {
     };
   }
 
-  if (!forecast || forecast.length === 0) {
+  if (!weather && (!forecast || forecast.length === 0)) {
     return {
       icon: 'cloud-offline-outline',
       label: "Today's Weather",
@@ -279,7 +367,7 @@ const resolveWeatherCardState = (loading, forecast) => {
     };
   }
 
-  const alerts = buildAlertsFromForecast(forecast);
+  const alerts = buildAlertsFromForecast(weather, forecast);
   const top = alerts[0];
 
   return {
@@ -388,7 +476,7 @@ const DayMarkModal = ({ visible, dateStr, marks, onToggle, onClose, themeColors 
   );
 };
 
-const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => {
+const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast, onMarksChanged }) => {
   const { themeColors } = useTheme();
   const [currentMonth, setCurrentMonth] = useState(new Date().getMonth());
   const [currentYear, setCurrentYear] = useState(new Date().getFullYear());
@@ -396,8 +484,8 @@ const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => 
   const [dayModalDate, setDayModalDate] = useState(null);
   const [selectedCareTip, setSelectedCareTip] = useState(null);
 
-  const goodPlantingDays = buildGoodPlantingDays(forecast);
-  const alerts = buildAlertsFromForecast(forecast);
+  const goodPlantingDays = buildGoodPlantingDays(weather, forecast);
+  const alerts = buildAlertsFromForecast(weather, forecast);
 
   useEffect(() => {
     if (visible) {
@@ -409,14 +497,23 @@ const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => 
     Haptics.selectionAsync();
     const next = { ...marks };
     const dayMarks = { ...(next[dateStr] || {}) };
+
     if (dayMarks[type]) delete dayMarks[type];
     else dayMarks[type] = true;
 
-    if (Object.keys(dayMarks).length === 0) delete next[dateStr];
+    const activeKeys = Object.keys(dayMarks);
+
+    if (activeKeys.length === 0) delete next[dateStr];
     else next[dateStr] = dayMarks;
 
     setMarks(next);
     await saveCalendarMarks(next);
+
+    // Notify (toast + bell icon) with the combined set of marks for that day
+    await notifyCalendarMarks(dateStr, activeKeys);
+
+    // Let HomeScreen know so it can refresh its notifications list
+    if (typeof onMarksChanged === 'function') onMarksChanged();
   };
 
   const changeMonth = (delta) => {
@@ -538,7 +635,7 @@ const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast }) => 
 
               <View style={[styles.calendarLegendWrap, { borderTopColor: themeColors.border }]}>
                 <View style={styles.calendarLegend}>
-                  <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendGood]} /><Text style={[styles.legendText, { color: themeColors.textSecondary }]}>Good Planting Day</Text></View>
+                  <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendGood]} /><Text style={[styles.legendText, { color: themeColors.textSecondary }]}>Good Planting Today</Text></View>
                   <View style={styles.legendItem}><View style={[styles.legendDot, styles.legendToday]} /><Text style={[styles.legendText, { color: themeColors.textSecondary }]}>Today</Text></View>
                 </View>
                 <View style={styles.calendarLegend}>
@@ -639,6 +736,7 @@ const notificationIcon = (type) => {
     case 'avatar_updated':  return { name: 'image-outline',         color: '#7A5649' };
     case 'password_changed':return { name: 'lock-closed-outline',   color: '#BA1A1A' };
     case 'scan_saved':      return { name: 'bookmark-outline',      color: '#0D631B' };
+    case 'calendar_mark':   return { name: 'calendar-outline',      color: '#2563EB' };
     default:                return { name: 'notifications-outline', color: '#707A6C' };
   }
 };
@@ -964,12 +1062,17 @@ const HomeScreen = ({ navigation }) => {
   const currentWeatherLabel = weather?.label || 'Sunny';
   const currentWeatherTemp = weather ? `${weather.temp}°C` : '28°C';
 
-  const weatherCard = resolveWeatherCardState(weatherLoading, forecast);
+  const weatherCard = resolveWeatherCardState(weatherLoading, weather, forecast);
 
   const hasActivity = !!lastScan || savedScans.length > 0;
   const scanTime = (row) => row?.captured_at || row?.created_at;
 
   const greeting = getGreeting();
+
+  // Called by WeatherAlertModal after a mark is toggled, so the bell list is fresh.
+  const handleMarksChanged = useCallback(() => {
+    loadNotifications();
+  }, [loadNotifications]);
 
   return (
     <SafeAreaView
@@ -1115,7 +1218,7 @@ const HomeScreen = ({ navigation }) => {
                 <View style={styles.scanTextContainer}>
                   <Text style={styles.scanTitle}>Scan Your Crop</Text>
                   <Text style={styles.scanDescription}>
-                    AI-powered disease detection for cassava & roots
+                    AI-powered disease detection for Cassava Leaves
                   </Text>
                 </View>
               </View>
@@ -1248,6 +1351,7 @@ const HomeScreen = ({ navigation }) => {
         weather={weather}
         forecast={forecast}
         loading={weatherLoading}
+        onMarksChanged={handleMarksChanged}
       />
 
       <NotificationsModal

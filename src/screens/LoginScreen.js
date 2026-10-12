@@ -19,7 +19,7 @@ const CustomModal = ({ visible, onClose, title, message, type = 'success', onCon
       default: return { name: 'information-circle', color: themeColors.primary };
     }
   };
-  const icon = getIcon();
+  const icon = getIcon(); 
 
   const handleActionPress = () => {
     onClose();
