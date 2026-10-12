@@ -45,6 +45,11 @@ const SettingsScreen = ({ navigation }) => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
+  // ---------- DEACTIVATION (frontend only for now) ----------
+  const [deactivateModalVisible, setDeactivateModalVisible] = useState(false);
+  const [deactivating, setDeactivating] = useState(false);
+  const [deactivatedPreview, setDeactivatedPreview] = useState(false);
+
   const checkAuth = useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
@@ -102,7 +107,7 @@ const SettingsScreen = ({ navigation }) => {
     }, [checkAuth])
   );
 
-  const GUEST_LOCKED_MODALS = ['profile', 'password', 'security'];
+  const GUEST_LOCKED_MODALS = ['profile', 'security'];
 
   const openModal = (name) => {
     if (GUEST_LOCKED_MODALS.includes(name) && isGuest) {
@@ -321,6 +326,54 @@ const SettingsScreen = ({ navigation }) => {
     }
   };
 
+  // ---------- DEACTIVATE ACCOUNT (frontend stub) ----------
+  const openDeactivateModal = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    setDeactivateModalVisible(true);
+  };
+
+  const cancelDeactivate = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setDeactivateModalVisible(false);
+  };
+
+  const handleDeactivateAccount = async () => {
+    setDeactivating(true);
+    try {
+      // ============================================================
+      // TODO: replace this block with the real Supabase call once
+      // the backend is ready. Expected backend behavior:
+      //
+      //   const { data: { session } } = await supabase.auth.getSession();
+      //   const now = new Date();
+      //   const deletionAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+      //   await supabase.from('profiles').update({
+      //     deactivated_at: now.toISOString(),
+      //     scheduled_deletion_at: deletionAt.toISOString(),
+      //   }).eq('id', session.user.id);
+      //   await supabase.auth.signOut();
+      // ============================================================
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      setDeactivateModalVisible(false);
+
+      // For now: preview what a deactivated user would see,
+      // then actually sign them out.
+      setDeactivatedPreview(true);
+
+      // Simulate sign-out after preview
+      setTimeout(async () => {
+        try { await supabase.auth.signOut(); } catch (_) {}
+        navigation.reset({ index: 0, routes: [{ name: 'Onboarding' }] });
+      }, 2500);
+    } catch (err) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Alert.alert('Deactivation failed', err.message || 'Please try again.');
+    } finally {
+      setDeactivating(false);
+    }
+  };
+
   const persistToggle = async (key, value) => {
     const { data: { session } } = await supabase.auth.getSession();
     if (!session?.user?.id) return;
@@ -376,6 +429,40 @@ const SettingsScreen = ({ navigation }) => {
     });
   };
 
+  // ============================================================
+  // DEACTIVATED PREVIEW SCREEN (frontend only — will be replaced
+  // by a real screen on the Login flow once backend is wired)
+  // ============================================================
+  if (deactivatedPreview) {
+    return (
+      <SafeAreaView style={[styles.container, { backgroundColor: themeColors.background }]} edges={['top']}>
+        <View style={styles.deactivatedContainer}>
+          <View style={[styles.deactivatedIconWrap, { backgroundColor: themeColors.primary + '20' }]}>
+            <Ionicons name="pause-circle-outline" size={64} color={themeColors.primary} />
+          </View>
+          <Text style={[styles.deactivatedTitle, { color: themeColors.text }]}>
+            Account Deactivated
+          </Text>
+          <Text style={[styles.deactivatedBody, { color: themeColors.textSecondary }]}>
+            Your account has been deactivated. Your scans, notes, and profile data will be preserved for 30 days.
+          </Text>
+          <Text style={[styles.deactivatedBody, { color: themeColors.textSecondary }]}>
+            Sign in again within 30 days to reactivate. After that, your account will be permanently deleted.
+          </Text>
+          <View style={[styles.deactivatedCountdown, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
+            <Ionicons name="time-outline" size={20} color={themeColors.primary} />
+            <Text style={[styles.deactivatedCountdownText, { color: themeColors.text }]}>
+              Signed out — returning to login…
+            </Text>
+          </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // ============================================================
+  // GUEST GATE MODAL
+  // ============================================================
   const renderGuestGateModal = () => (
     <Modal
       visible={guestGateVisible}
@@ -393,7 +480,7 @@ const SettingsScreen = ({ navigation }) => {
             Sign In Required
           </Text>
           <Text style={[styles.confirmModalBody, { color: themeColors.textSecondary }]}>
-            You need a RootCare account to edit your profile, change your password, or manage security settings.
+            You need a RootCare account to edit your profile or manage security settings.
           </Text>
 
           <TouchableOpacity
@@ -435,6 +522,83 @@ const SettingsScreen = ({ navigation }) => {
     </Modal>
   );
 
+  // ============================================================
+  // DEACTIVATE CONFIRMATION MODAL
+  // ============================================================
+  const renderDeactivateModal = () => (
+    <Modal
+      visible={deactivateModalVisible}
+      transparent
+      animationType="fade"
+      onRequestClose={cancelDeactivate}
+    >
+      <View style={styles.modalOverlayConfirm}>
+        <View style={[styles.confirmModalCard, { backgroundColor: themeColors.surface }]}>
+          <View style={[styles.exitIconCircle, { backgroundColor: themeColors.error + '20' }]}>
+            <Ionicons name="pause-circle-outline" size={32} color={themeColors.error} />
+          </View>
+
+          <Text style={[styles.confirmModalTitle, { color: themeColors.text }]}>
+            Deactivate Account?
+          </Text>
+
+          <View style={styles.deactivateBulletList}>
+            <View style={styles.deactivateBullet}>
+              <Ionicons name="checkmark-circle" size={18} color={themeColors.primary} style={{ marginTop: 1 }} />
+              <Text style={[styles.deactivateBulletText, { color: themeColors.textSecondary }]}>
+                Your account is deactivated immediately.
+              </Text>
+            </View>
+            <View style={styles.deactivateBullet}>
+              <Ionicons name="checkmark-circle" size={18} color={themeColors.primary} style={{ marginTop: 1 }} />
+              <Text style={[styles.deactivateBulletText, { color: themeColors.textSecondary }]}>
+                Scans, notes, and profile are preserved for 30 days.
+              </Text>
+            </View>
+            <View style={styles.deactivateBullet}>
+              <Ionicons name="checkmark-circle" size={18} color={themeColors.primary} style={{ marginTop: 1 }} />
+              <Text style={[styles.deactivateBulletText, { color: themeColors.textSecondary }]}>
+                Sign in again within 30 days to reactivate instantly.
+              </Text>
+            </View>
+            <View style={styles.deactivateBullet}>
+              <Ionicons name="alert-circle" size={18} color={themeColors.error} style={{ marginTop: 1 }} />
+              <Text style={[styles.deactivateBulletText, { color: themeColors.textSecondary }]}>
+                After 30 days, everything is permanently deleted.
+              </Text>
+            </View>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.exitConfirmButton, { backgroundColor: themeColors.error, marginTop: 20 }]}
+            onPress={handleDeactivateAccount}
+            disabled={deactivating}
+            activeOpacity={0.85}
+          >
+            {deactivating ? (
+              <ActivityIndicator color="#FFFFFF" />
+            ) : (
+              <Text style={[styles.exitConfirmButtonText, { color: themeColors['on-error'] || '#FFFFFF' }]}>
+                Deactivate Account
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.confirmCancelButton}
+            onPress={cancelDeactivate}
+            disabled={deactivating}
+            activeOpacity={0.7}
+          >
+            <Text style={[styles.confirmCancelText, { color: themeColors.textSecondary }]}>
+              Keep My Account
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
   const renderFeedbackModal = () => (
     <Modal visible={feedbackVisible} transparent animationType="fade" onRequestClose={() => setFeedbackVisible(false)}>
       <View style={styles.modalOverlayConfirm}>
@@ -467,7 +631,6 @@ const SettingsScreen = ({ navigation }) => {
 
     const modalTitles = {
       profile: 'Edit Profile',
-      password: 'Change Password',
       security: 'Security & Privacy',
       help: 'Help Center',
       terms: 'Terms of Service',
@@ -580,8 +743,11 @@ const SettingsScreen = ({ navigation }) => {
                 </>
               )}
 
-              {activeModal === 'password' && (
+              {activeModal === 'security' && (
                 <>
+                  <Text style={[styles.modalSectionHeader, { color: themeColors.text }]}>
+                    Change Password
+                  </Text>
                   <Text style={[styles.modalDescription, { color: themeColors.textSecondary }]}>
                     Enter your current password and set a new, secure password.
                   </Text>
@@ -636,70 +802,22 @@ const SettingsScreen = ({ navigation }) => {
                       <Text style={styles.modalSaveButtonText}>Update Password</Text>
                     )}
                   </TouchableOpacity>
-                </>
-              )}
 
-              {activeModal === 'security' && (
-                <>
+                  <View style={[styles.sectionDivider, { backgroundColor: themeColors.border }]} />
+
+                  <Text style={[styles.modalSectionHeader, { color: themeColors.text }]}>
+                    Danger Zone
+                  </Text>
                   <Text style={[styles.modalDescription, { color: themeColors.textSecondary }]}>
-                    Manage how your data is secured and how you interact with RootCare.
+                    Temporarily deactivate your account. You have 30 days to reactivate before everything is deleted.
                   </Text>
 
-                  <View style={[styles.settingRow, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
+                  <View style={[styles.settingRow, { backgroundColor: themeColors.surface, borderColor: themeColors.error + '40' }]}>
                     <View style={styles.settingRowLeft}>
-                      <Ionicons name="finger-print-outline" size={22} color={themeColors.textSecondary} />
-                      <Text style={[styles.settingRowLabel, { color: themeColors.text }]}>Biometric Login</Text>
+                      <Ionicons name="pause-circle-outline" size={22} color={themeColors.error} />
+                      <Text style={[styles.settingRowLabel, { color: themeColors.error }]}>Deactivate Account</Text>
                     </View>
-                    <Switch
-                      value={false}
-                      onValueChange={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
-                      trackColor={{ false: '#D1D1D6', true: themeColors.primary }}
-                      thumbColor={'#FFFFFF'}
-                    />
-                  </View>
-
-                  <View style={[styles.settingRow, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
-                    <View style={styles.settingRowLeft}>
-                      <Ionicons name="eye-off-outline" size={22} color={themeColors.textSecondary} />
-                      <Text style={[styles.settingRowLabel, { color: themeColors.text }]}>Two-Factor Authentication</Text>
-                    </View>
-                    <Switch
-                      value={false}
-                      onValueChange={() => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light)}
-                      trackColor={{ false: '#D1D1D6', true: themeColors.primary }}
-                      thumbColor={'#FFFFFF'}
-                    />
-                  </View>
-
-                  <View style={[styles.settingRow, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
-                    <View style={styles.settingRowLeft}>
-                      <Ionicons name="trash-outline" size={22} color={themeColors.error} />
-                      <Text style={[styles.settingRowLabel, { color: themeColors.error }]}>Delete Account</Text>
-                    </View>
-                    <TouchableOpacity
-                      onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                        Alert.alert(
-                          'Delete Account',
-                          'This action is permanent and will erase all your scans, notes, and profile data. Continue?',
-                          [
-                            { text: 'Cancel', style: 'cancel' },
-                            {
-                              text: 'Delete Forever',
-                              style: 'destructive',
-                              onPress: async () => {
-                                const { data: { session } } = await supabase.auth.getSession();
-                                if (!session?.user?.id) return;
-                                await supabase.from('scans').delete().eq('user_id', session.user.id);
-                                await supabase.from('profiles').delete().eq('id', session.user.id);
-                                await supabase.auth.signOut();
-                                navigation.reset({ index: 0, routes: [{ name: 'Onboarding' }] });
-                              },
-                            },
-                          ]
-                        );
-                      }}
-                    >
+                    <TouchableOpacity onPress={openDeactivateModal}>
                       <Ionicons name="chevron-forward" size={20} color={themeColors.textSecondary} />
                     </TouchableOpacity>
                   </View>
@@ -843,16 +961,6 @@ const SettingsScreen = ({ navigation }) => {
             <View style={styles.menuItemLeft}>
               <Ionicons name="person-outline" size={20} color={themeColors.secondary} />
               <Text style={[styles.menuItemText, { color: themeColors.text }]}>Edit Profile</Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={themeColors.textSecondary} />
-          </TouchableOpacity>
-
-          <View style={[styles.divider, { backgroundColor: themeColors.border }]} />
-
-          <TouchableOpacity style={styles.menuItem} activeOpacity={0.7} onPress={() => openModal('password')}>
-            <View style={styles.menuItemLeft}>
-              <Ionicons name="lock-closed-outline" size={20} color={themeColors.secondary} />
-              <Text style={[styles.menuItemText, { color: themeColors.text }]}>Change Password</Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={themeColors.textSecondary} />
           </TouchableOpacity>
@@ -1018,6 +1126,7 @@ const SettingsScreen = ({ navigation }) => {
       {renderModal()}
       {renderFeedbackModal()}
       {renderGuestGateModal()}
+      {renderDeactivateModal()}
     </SafeAreaView>
   );
 };
@@ -1069,6 +1178,7 @@ const styles = StyleSheet.create({
   profileAvatarLarge: { width: 96, height: 96, borderRadius: 48, alignItems: 'center', justifyContent: 'center' },
   profileInitialLarge: { fontSize: 36, fontWeight: '700', color: '#FFFFFF' },
   editPhotoButton: { position: 'absolute', bottom: 0, right: 0, width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#FFFFFF' },
+  modalSectionHeader: { fontSize: 16, fontWeight: '700', marginBottom: 8, letterSpacing: 0.2 },
   modalSectionTitle: { fontSize: 13, fontWeight: '600', marginBottom: 8, marginTop: 12 },
   inputContainer: { flexDirection: 'row', alignItems: 'center', borderWidth: 1, borderRadius: 12, paddingHorizontal: 14, height: 52, gap: 10 },
   input: { flex: 1, fontSize: 15 },
@@ -1079,6 +1189,18 @@ const styles = StyleSheet.create({
   settingRowLeft: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   settingRowLabel: { fontSize: 14, fontWeight: '500' },
   legalText: { fontSize: 14, lineHeight: 24 },
+  sectionDivider: { height: 1, marginVertical: 28, opacity: 0.6 },
+
+  // Deactivation
+  deactivateBulletList: { width: '100%', gap: 10, marginTop: 4, marginBottom: 4 },
+  deactivateBullet: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
+  deactivateBulletText: { flex: 1, fontSize: 13, lineHeight: 18 },
+  deactivatedContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32, gap: 16 },
+  deactivatedIconWrap: { width: 120, height: 120, borderRadius: 60, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  deactivatedTitle: { fontSize: 24, fontWeight: '700', textAlign: 'center' },
+  deactivatedBody: { fontSize: 14, textAlign: 'center', lineHeight: 20, maxWidth: 340 },
+  deactivatedCountdown: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, borderWidth: 1, marginTop: 16 },
+  deactivatedCountdownText: { fontSize: 13, fontWeight: '500' },
 });
 
 export default SettingsScreen;

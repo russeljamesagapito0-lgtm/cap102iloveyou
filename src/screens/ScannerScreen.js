@@ -1,5 +1,5 @@
 ﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
-import {View,Text,TouchableOpacity,Image,StyleSheet,Platform,Animated,Alert,ActivityIndicator,Dimensions,}from 'react-native';
+import {View,Text,TouchableOpacity,Image,StyleSheet,Platform,Animated,Alert,ActivityIndicator,Dimensions,Pressable,}from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -23,15 +23,11 @@ const TIMEOUT = parseInt(process.env.EXPO_PUBLIC_API_TIMEOUT || '30000');
 const MAX_RETRIES = parseInt(process.env.EXPO_PUBLIC_MAX_RETRIES || '3');
 const DEBUG = process.env.EXPO_PUBLIC_DEBUG === 'true';
 
-const COMPUTER_IP = API_BASE_URL.replace('http://', '').replace(':5000', '');
-
-// Confidence threshold: below this, we try Gemini Vision
 const GEMINI_FALLBACK_THRESHOLD = 70;
+const CROP_FRACTION = 0.80;
 
 if (DEBUG) {
   console.log(' API Base URL:', API_BASE_URL);
-  console.log(' API URL:', API_URL);
-  console.log(' Health URL:', HEALTH_URL);
 }
 
 const fetchWithTimeout = (url, options = {}, timeout = TIMEOUT) => {
@@ -63,12 +59,28 @@ const ScannerScreen = ({ navigation, route }) => {
   const [permission, requestPermission] = useCameraPermissions();
   const cameraRef = useRef(null);
 
-  const scanLineAnim = useRef(new Animated.Value(0)).current;
-  const pulseAnim = useRef(new Animated.Value(1)).current;
+  // Corner focus animation: 1 = resting size, 0.9 = contracted
+  const cornerFocusAnim = useRef(new Animated.Value(1)).current;
+
+  const triggerFocusAnimation = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Animated.sequence([
+      Animated.timing(cornerFocusAnim, {
+        toValue: 0.88,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+      Animated.delay(140),
+      Animated.spring(cornerFocusAnim, {
+        toValue: 1,
+        friction: 5,
+        tension: 90,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
 
   useEffect(() => {
-    startScanLineAnimation();
-    startPulseAnimation();
     checkApiHealth();
 
     loadOfflineModel()
@@ -81,7 +93,7 @@ const ScannerScreen = ({ navigation, route }) => {
       setIsOnline(connected);
 
       if (connected && !wasConnected) {
-        if (DEBUG) console.log('Back online — flushing sync queue');
+        if (DEBUG) console.log('Back online — flushing sync queues');
         flushQueue()
           .then((res) => {
             if (res?.flushed > 0 && DEBUG) console.log(' Queue flushed:', res);
@@ -115,12 +127,10 @@ const ScannerScreen = ({ navigation, route }) => {
   );
 
   const checkApiHealth = async (attempt = 0) => {
-    if (DEBUG) console.log(' Checking API health (attempt ' + (attempt + 1) + '):', HEALTH_URL);
+    if (DEBUG) console.log(' Checking API health (attempt ' + (attempt + 1) + ')');
     try {
       const response = await fetchWithTimeout(HEALTH_URL, { method: 'GET' }, 5000);
       if (response.ok) {
-        const data = await response.json();
-        if (DEBUG) console.log(' Server healthy:', data);
         setIsApiReady(true);
         setApiCheckDone(true);
         setRetryCount(0);
@@ -128,8 +138,6 @@ const ScannerScreen = ({ navigation, route }) => {
       }
       throw new Error('Server error');
     } catch (error) {
-      if (DEBUG) console.log(' Server unreachable:', error?.message);
-
       if (attempt < MAX_RETRIES) {
         setRetryCount(attempt + 1);
         setTimeout(() => checkApiHealth(attempt + 1), 2000);
@@ -150,31 +158,34 @@ const ScannerScreen = ({ navigation, route }) => {
     }
   };
 
-  const startScanLineAnimation = () => {
-    scanLineAnim.setValue(0);
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(scanLineAnim, { toValue: 1, duration: 2500, useNativeDriver: true }),
-        Animated.timing(scanLineAnim, { toValue: 0, duration: 2500, useNativeDriver: true }),
-      ])
-    ).start();
-  };
-
-  const startPulseAnimation = () => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, { toValue: 1.05, duration: 2000, useNativeDriver: true }),
-        Animated.timing(pulseAnim, { toValue: 0.95, duration: 2000, useNativeDriver: true }),
-      ])
-    ).start();
-  };
-
   const preprocessImage = async (imageUri) => {
+    const { width: imgW, height: imgH } = await ImageManipulator.manipulateAsync(
+      imageUri,
+      [],
+      {}
+    );
+
+    const shortSide = Math.min(imgW, imgH);
+    const cropSize = Math.round(shortSide * CROP_FRACTION);
+    const originX = Math.round((imgW - cropSize) / 2);
+    const originY = Math.round((imgH - cropSize) / 2);
+
     const manipulatedImage = await ImageManipulator.manipulateAsync(
       imageUri,
-      [{ resize: { width: 384, height: 384 } }],
+      [
+        {
+          crop: {
+            originX,
+            originY,
+            width: cropSize,
+            height: cropSize,
+          },
+        },
+        { resize: { width: 384, height: 384 } },
+      ],
       { format: ImageManipulator.SaveFormat.JPEG, compress: 0.9 }
     );
+
     const response = await fetch(manipulatedImage.uri);
     const blob = await response.blob();
     return new Promise((resolve, reject) => {
@@ -219,7 +230,7 @@ const ScannerScreen = ({ navigation, route }) => {
           capturedAt: new Date().toISOString(),
           diagnosisCode: result.diseaseKey,
           confidence: result.confidence,
-         modelVersion: 'convnext-384-tflite-v1',
+          modelVersion: 'convnext-384-tflite-v1',
           inferredAt: new Date().toISOString(),
         },
       });
@@ -229,7 +240,6 @@ const ScannerScreen = ({ navigation, route }) => {
     }
   };
 
-  // Map a Gemini response into the shape ScannerScreen/ResultScreen expects
   const normalizeGeminiResult = (geminiData, fallbackResult) => {
     const keyMap = {
       'Cassava Mosaic Disease': 'CMD',
@@ -275,19 +285,15 @@ const ScannerScreen = ({ navigation, route }) => {
     setLoading(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    // ---- Path 1: Flask API (online) ----
     if (isApiReady && isOnline) {
       try {
         const base64Image = await preprocessImage(image);
-        if (DEBUG) console.log('Sending request to:', API_URL);
 
         const response = await fetchWithTimeout(API_URL, {
           method: 'POST',
           headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
           body: JSON.stringify({ image: base64Image }),
         });
-
-        if (DEBUG) console.log('Response status:', response.status);
 
         if (!response.ok) {
           let errMsg = 'Analysis failed';
@@ -299,7 +305,6 @@ const ScannerScreen = ({ navigation, route }) => {
         }
 
         const result = await response.json();
-        if (DEBUG) console.log('Analysis result:', result);
 
         if (result.success === false && result.error === 'not_cassava') {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -325,7 +330,6 @@ const ScannerScreen = ({ navigation, route }) => {
       }
     }
 
-    // ---- Path 2: TFLite (offline) ----
     if (!offlineReady) {
       setLoading(false);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -353,7 +357,6 @@ const ScannerScreen = ({ navigation, route }) => {
         return;
       }
 
-      // Enrich with local disease info
       const info = DISEASE_INFO[tfliteResult.diseaseKey];
       let enriched = {
         ...tfliteResult,
@@ -364,14 +367,11 @@ const ScannerScreen = ({ navigation, route }) => {
         symptoms: info?.symptoms || '',
       };
 
-      // ---- Path 3: Gemini Vision (only if low confidence + online) ----
       const lowConfidence =
         typeof tfliteResult.confidence === 'number' &&
         tfliteResult.confidence < GEMINI_FALLBACK_THRESHOLD;
 
       if (lowConfidence && isOnline) {
-        if (DEBUG) console.log('TFLite confidence low, trying Gemini...');
-
         Toast.show({
           type: 'info',
           text1: 'Enhancing with AI...',
@@ -382,7 +382,6 @@ const ScannerScreen = ({ navigation, route }) => {
         const geminiResponse = await analyzeCropImage(image);
 
         if (geminiResponse.success && geminiResponse.data) {
-          if (DEBUG) console.log('Gemini result:', geminiResponse.data);
           enriched = normalizeGeminiResult(geminiResponse.data, tfliteResult);
 
           Toast.show({
@@ -392,7 +391,6 @@ const ScannerScreen = ({ navigation, route }) => {
             visibilityTime: 2000,
           });
         } else {
-          if (DEBUG) console.log('Gemini failed, keeping TFLite result');
           Toast.show({
             type: 'info',
             text1: 'Offline Result',
@@ -411,7 +409,6 @@ const ScannerScreen = ({ navigation, route }) => {
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      // Queue for later sync (based on original TFLite result)
       await queueOfflineScan(image, tfliteResult);
 
       navigateToResult(enriched, image);
@@ -473,11 +470,6 @@ const ScannerScreen = ({ navigation, route }) => {
     });
   };
 
-  const scanLineTranslate = scanLineAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [-140, 140],
-  });
-
   if (!permission) {
     return <View style={styles.container} />;
   }
@@ -529,12 +521,26 @@ const ScannerScreen = ({ navigation, route }) => {
       {isApiReady && (
         <View style={styles.serverConnectedBar}>
           <Ionicons name="checkmark-circle" size={16} color="#FFFFFF" />
-          <Text style={styles.serverConnectedText}>Server Connected </Text>
+          <Text style={styles.serverConnectedText}>Server Connected</Text>
+        </View>
+      )}
+
+      {!image && (
+        <View style={styles.instructionBanner}>
+          <Ionicons name="leaf-outline" size={18} color="#88D982" />
+          <View style={styles.instructionTextBlock}>
+            <Text style={styles.instructionTitle}>
+              Fit a single cassava leaf inside the corner marks.
+            </Text>
+            <Text style={styles.instructionSub}>
+              Only cassava leaves are supported. Non-cassava leaves will produce unreliable diagnoses.
+            </Text>
+          </View>
         </View>
       )}
 
       <View style={styles.mainContent}>
-        <View style={styles.cameraCard}>
+        <Pressable style={styles.cameraCard} onPress={triggerFocusAnimation}>
           {image ? (
             <Image source={{ uri: image }} style={styles.previewImage} resizeMode="cover" />
           ) : (
@@ -552,19 +558,21 @@ const ScannerScreen = ({ navigation, route }) => {
             </TouchableOpacity>
           )}
 
-          <View style={styles.scanFrameContainer}>
-            <View style={styles.scanFrame}>
-              <View style={styles.cornerTL} />
-              <View style={styles.cornerTR} />
-              <View style={styles.cornerBL} />
-              <View style={styles.cornerBR} />
-              <Animated.View
-                style={[styles.scanLine, { transform: [{ translateY: scanLineTranslate }] }]}
-              />
-              <Animated.View style={[styles.pulseRing, { transform: [{ scale: pulseAnim }] }]} />
-            </View>
-          </View>
-        </View>
+          {!image && (
+            <Animated.View
+              style={[
+                styles.cornerOverlay,
+                { transform: [{ scale: cornerFocusAnim }] },
+              ]}
+              pointerEvents="none"
+            >
+              <View style={[styles.cornerBracket, styles.cornerTopLeft]} />
+              <View style={[styles.cornerBracket, styles.cornerTopRight]} />
+              <View style={[styles.cornerBracket, styles.cornerBottomLeft]} />
+              <View style={[styles.cornerBracket, styles.cornerBottomRight]} />
+            </Animated.View>
+          )}
+        </Pressable>
 
         {loading && (
           <View style={styles.statusContainer}>
@@ -681,6 +689,32 @@ const styles = StyleSheet.create({
   serverConnectedText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
   retryBtn: { padding: 4 },
 
+  instructionBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: 'rgba(136, 217, 130, 0.1)',
+    borderColor: 'rgba(136, 217, 130, 0.35)',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginHorizontal: 20,
+    marginTop: 10,
+  },
+  instructionTextBlock: { flex: 1, gap: 2 },
+  instructionTitle: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  instructionSub: {
+    color: 'rgba(255, 255, 255, 0.75)',
+    fontSize: 11,
+    lineHeight: 15,
+  },
+
   mainContent: {
     flex: 1,
     alignItems: 'center',
@@ -721,90 +755,46 @@ const styles = StyleSheet.create({
     zIndex: 20,
   },
 
-  scanFrameContainer: {
+  cornerOverlay: {
     position: 'absolute',
+    top: '18%',
+    left: '12%',
+    right: '12%',
+    bottom: '18%',
+  },
+  cornerBracket: {
+    position: 'absolute',
+    width: 26,
+    height: 26,
+    borderColor: 'rgba(255, 255, 255, 0.85)',
+  },
+  cornerTopLeft: {
     top: 0,
     left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
+    borderTopWidth: 2.5,
+    borderLeftWidth: 2.5,
+    borderTopLeftRadius: 4,
   },
-  scanFrame: {
-    width: 220,
-    height: 220,
-    borderRadius: 16,
-    borderWidth: 2,
-    borderColor: 'rgba(136, 217, 130, 0.5)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-    position: 'relative',
-  },
-  cornerTL: {
-    position: 'absolute',
-    top: -2,
-    left: -2,
-    width: 32,
-    height: 32,
-    borderTopWidth: 4,
-    borderLeftWidth: 4,
-    borderColor: '#88D982',
-    borderTopLeftRadius: 12,
-  },
-  cornerTR: {
-    position: 'absolute',
-    top: -2,
-    right: -2,
-    width: 32,
-    height: 32,
-    borderTopWidth: 4,
-    borderRightWidth: 4,
-    borderColor: '#88D982',
-    borderTopRightRadius: 12,
-  },
-  cornerBL: {
-    position: 'absolute',
-    bottom: -2,
-    left: -2,
-    width: 32,
-    height: 32,
-    borderBottomWidth: 4,
-    borderLeftWidth: 4,
-    borderColor: '#88D982',
-    borderBottomLeftRadius: 12,
-  },
-  cornerBR: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    width: 32,
-    height: 32,
-    borderBottomWidth: 4,
-    borderRightWidth: 4,
-    borderColor: '#88D982',
-    borderBottomRightRadius: 12,
-  },
-  scanLine: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    height: 2,
-    backgroundColor: '#88D982',
-    shadowColor: '#88D982',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.8,
-    shadowRadius: 15,
-    elevation: 8,
-  },
-  pulseRing: {
-    position: 'absolute',
+  cornerTopRight: {
     top: 0,
-    left: 0,
     right: 0,
+    borderTopWidth: 2.5,
+    borderRightWidth: 2.5,
+    borderTopRightRadius: 4,
+  },
+  cornerBottomLeft: {
     bottom: 0,
-    backgroundColor: 'rgba(136, 217, 130, 0.1)',
-    borderRadius: 16,
+    left: 0,
+    borderBottomWidth: 2.5,
+    borderLeftWidth: 2.5,
+    borderBottomLeftRadius: 4,
+  },
+  cornerBottomRight: {
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: 2.5,
+    borderRightWidth: 2.5,
+    borderBottomRightRadius: 4,
   },
 
   statusContainer: { position: 'absolute', top: '50%', marginTop: 20 },
@@ -864,7 +854,7 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     gap: 10,
   },
-  analyzeButtonDisabled: { backgroundColor: '#666666', opacity: 0.7 },
+  analyzeButtonDisabled: { backgroundColor: '#666666', opacity: 0.85 },
   analyzeButtonText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
 });
 
