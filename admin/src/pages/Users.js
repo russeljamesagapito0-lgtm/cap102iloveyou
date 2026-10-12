@@ -1,7 +1,8 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Modal from '../components/Modal';
 import Badge from '../components/Badge';
 import ScanImage from '../components/ScanImage';
+import useAutoRefresh from '../lib/useAutoRefresh';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
@@ -191,6 +192,35 @@ export default function Users() {
   const confirm = useConfirm();
   const toast = useToast();
 
+  // Silent auto-refresh: user list (with scan counts) + the open user's scans
+  const selectedIdRef = useRef(null);
+  useEffect(() => { selectedIdRef.current = selected?.id || null; }, [selected]);
+  const diseaseNamesRef = useRef({});
+
+  const refreshAll = useCallback(async () => {
+    const { data: prof, error: profError } = await supabase
+      .from('profiles')
+      .select('*, scans(count)')
+      .order('created_at', { ascending: false });
+    if (!profError && prof) setUsers(prof.map(mapProfile));
+
+    const uid = selectedIdRef.current;
+    if (uid) {
+      const { data, error } = await supabase
+        .from('scans')
+        .select('*')
+        .eq('user_id', uid)
+        .order('created_at', { ascending: false })
+        .limit(500);
+      if (!error && data) {
+        const fresh = data.map((s) => buildScan(s, diseaseNamesRef.current));
+        setScanCache((prev) => ({ ...prev, [uid]: fresh }));
+      }
+    }
+  }, []);
+
+  useAutoRefresh(refreshAll, { intervalMs: 10000, table: 'scans' });
+
   useEffect(() => {
     supabase
       .from('profiles')
@@ -223,6 +253,7 @@ export default function Users() {
     () => Object.fromEntries(diseases.map((d) => [d.code, d.name])),
     [diseases]
   );
+  diseaseNamesRef.current = diseaseNames;
 
   const openUser = async (u) => {
     setSelected(u);

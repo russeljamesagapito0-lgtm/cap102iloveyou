@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Badge from '../components/Badge';
 import Modal from '../components/Modal';
 import ScanImage from '../components/ScanImage';
+import useAutoRefresh from '../lib/useAutoRefresh';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
@@ -63,6 +64,20 @@ export default function Scans() {
   const [newLabel, setNewLabel] = useState('');
   const confirm = useConfirm();
   const toast = useToast();
+  const namesRef = useRef(null); // disease code -> name, set once the first load has it
+
+  // Silent refetch (no spinner) used by the auto-refresh below
+  const refreshScans = useCallback(async () => {
+    if (!namesRef.current) return; // first load not finished yet
+    const { data, error } = await supabase
+      .from('scans')
+      .select('*, profiles(full_name,email)')
+      .order('created_at', { ascending: false })
+      .limit(1000);
+    if (!error && data) setScans(data.map((s) => buildScanObject(s, namesRef.current)));
+  }, []);
+
+  useAutoRefresh(refreshScans, { intervalMs: 10000, table: 'scans' });
 
   useEffect(() => {
     (async () => {
@@ -73,6 +88,7 @@ export default function Scans() {
 
       const names = Object.fromEntries((d || []).map((x) => [x.code, x.name]));
       setDiseases(d || []);
+      namesRef.current = names;
 
       const { data: p } = await supabase
         .from('profiles')
