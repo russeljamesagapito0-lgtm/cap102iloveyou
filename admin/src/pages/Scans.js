@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Badge from '../components/Badge';
 import Modal from '../components/Modal';
+import ScanImage from '../components/ScanImage';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
@@ -41,6 +42,7 @@ const buildScanObject = (s, names) => ({
   date: fmtDate(s.created_at),
   region: s.region || '-',
   image_url: s.image_url,
+  image_path: s.image_path,
   flagged: s.flagged,
   corrected: s.corrected,
 });
@@ -352,11 +354,7 @@ export default function Scans() {
           {filtered.map((s) => (
             <div key={s.id} className="scan-card">
               <div className="scan-thumb">
-                {s.image_url ? (
-                  <img src={s.image_url} alt="" className="scan-img" />
-                ) : (
-                  s.disease
-                )}
+                <ScanImage scan={s} fallback={s.disease} />
               </div>
               <div className="scan-body">
                 <div className="scan-title-row">
@@ -400,11 +398,7 @@ export default function Scans() {
         {selected && (
           <div className="stack-md">
             <div className="scan-thumb scan-thumb-lg">
-              {selected.image_url ? (
-                <img src={selected.image_url} alt="" className="scan-img" />
-              ) : (
-                selected.disease
-              )}
+              <ScanImage scan={selected} fallback={selected.disease} />
             </div>
 
             <div>

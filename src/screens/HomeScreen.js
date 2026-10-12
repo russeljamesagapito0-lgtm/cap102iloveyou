@@ -12,6 +12,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Toast from 'react-native-toast-message';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../utils/supabaseClient';
+import { resolveScanImageUris } from '../utils/syncManager';
 import { useTheme } from '../context/ThemeContext';
 import { markAllNotificationsRead, pushNotification } from '../utils/notifications';
 
@@ -933,7 +934,7 @@ const HomeScreen = ({ navigation }) => {
         console.warn('Last scan fetch failed:', lastError.message);
         setLastScan(null);
       } else {
-        setLastScan(lastData?.[0] || null);
+        setLastScan((await resolveScanImageUris(lastData || []))[0] || null);
       }
 
       const { data: savedData, error: savedError } = await supabase
@@ -950,7 +951,7 @@ const HomeScreen = ({ navigation }) => {
         console.warn('Saved scans fetch failed:', savedError.message);
         setSavedScans([]);
       } else {
-        setSavedScans(savedData || []);
+        setSavedScans(await resolveScanImageUris(savedData || []));
       }
     } catch (err) {
       console.warn('Recent activity error:', err.message);

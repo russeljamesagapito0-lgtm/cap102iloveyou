@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react';
 import Modal from '../components/Modal';
 import Badge from '../components/Badge';
+import ScanImage from '../components/ScanImage';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
@@ -36,6 +37,7 @@ const buildScan = (s, names) => ({
   date: fmtDate(s.created_at),
   region: s.region || '-',
   image_url: s.image_url,
+  image_path: s.image_path,
   flagged: s.flagged,
   corrected: s.corrected,
 });
@@ -613,15 +615,7 @@ export default function Users() {
                     {visibleScans.map((s) => (
                       <div key={s.id} className="scan-mini-card">
                         <div className="scan-mini-thumb">
-                          {s.image_url ? (
-                            <img
-                              src={s.image_url}
-                              alt=""
-                              className="scan-img"
-                            />
-                          ) : (
-                            s.disease
-                          )}
+                          <ScanImage scan={s} fallback={s.disease} />
                         </div>
                         <div className="scan-mini-body">
                           <div className="scan-title-row">
@@ -678,11 +672,7 @@ export default function Users() {
         {reviewTarget && (
           <div className="stack-md">
             <div className="scan-thumb scan-thumb-lg">
-              {reviewTarget.image_url ? (
-                <img src={reviewTarget.image_url} alt="" className="scan-img" />
-              ) : (
-                reviewTarget.disease
-              )}
+              <ScanImage scan={reviewTarget} fallback={reviewTarget.disease} />
             </div>
 
             <div>

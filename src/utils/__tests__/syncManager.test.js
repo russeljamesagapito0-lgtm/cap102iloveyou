@@ -40,6 +40,16 @@ jest.mock('@react-native-community/netinfo', () => ({
   }))
 }));
 
+jest.mock('expo-file-system/legacy', () => ({
+  documentDirectory: 'file:///docs/',
+  EncodingType: { Base64: 'base64' },
+  makeDirectoryAsync: jest.fn(() => Promise.resolve()),
+  copyAsync: jest.fn(() => Promise.resolve()),
+  deleteAsync: jest.fn(() => Promise.resolve()),
+  getInfoAsync: jest.fn(() => Promise.resolve({ exists: true })),
+  readAsStringAsync: jest.fn(() => Promise.resolve('AAAA')),
+}));
+
 jest.mock('base64-arraybuffer', () => ({
   decode: jest.fn(() => new ArrayBuffer(8))
 }));
@@ -48,7 +58,7 @@ jest.mock('base64-arraybuffer', () => ({
 jest.mock('../supabaseClient', () => ({
   supabase: {
     auth: {
-      getUser: jest.fn()
+      getSession: jest.fn()
     },
     from: jest.fn(),
     storage: {
@@ -63,8 +73,8 @@ describe('Sync Manager', () => {
     jest.clearAllMocks();
     
     // Setup default mock implementations
-    supabase.auth.getUser.mockResolvedValue({
-      data: { user: { id: 'test_user' } }
+    supabase.auth.getSession.mockResolvedValue({
+      data: { session: { user: { id: 'test_user' } } }
     });
     
     // Mock successful storage operations
@@ -146,7 +156,7 @@ describe('Sync Manager', () => {
       update: jest.fn().mockReturnThis(),
       delete: jest.fn().mockReturnThis(),
       eq: jest.fn().mockReturnThis(),
-      single: jest.fn().mockResolvedValue({
+      maybeSingle: jest.fn().mockResolvedValue({
         data: { image_path: 'test/path.jpg' },
         error: null
       }),
@@ -174,13 +184,13 @@ describe('Sync Manager', () => {
     // Create a mock that simulates network error with specific message
     const networkError = new Error('Network request failed');
     // Make sure it has the right message format that flushQueue checks
-    networkError.message = 'network error';
+    networkError.message = 'Network request failed'; // real RN message (capital N)
     
     // Mock the from method to return a query builder that fails
     const mockQueryBuilder = {
       select: jest.fn().mockReturnThis(),
       eq: jest.fn().mockReturnThis(),
-      single: jest.fn().mockRejectedValue(networkError),
+      maybeSingle: jest.fn().mockRejectedValue(networkError),
       delete: jest.fn().mockRejectedValue(networkError),
       update: jest.fn().mockRejectedValue(networkError)
     };
@@ -248,5 +258,106 @@ describe('Sync Manager', () => {
     
     const cached = JSON.parse(await AsyncStorage.getItem('rootcare_scan_cache'));
     expect(cached[0].is_archived).toBe(true);
+  });
+
+  describe('CREATE_SCAN (offline-first image save)', () => {
+    const FileSystem = require('expo-file-system/legacy');
+    const { savePendingScan } = require('../syncManager');
+
+    const mockScansBuilder = (upsertImpl) => {
+      const builder = {
+        select: jest.fn().mockReturnThis(),
+        eq: jest.fn().mockReturnThis(),
+        maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
+        upsert: jest.fn(upsertImpl || (() => Promise.resolve({ error: null }))),
+      };
+      supabase.from.mockReturnValue(builder);
+      return builder;
+    };
+
+    const baseScan = (scanId) => ({
+      scanId,
+      userId: 'test_user',
+      preparedImageUri: 'file:///cache/prepared.jpg',
+      diseaseCode: 'CMD',
+      diseaseName: 'Cassava Mosaic Disease',
+      accuracy: 93.5,
+    });
+
+    test('7. savePendingScan copies file, queues file path (no base64), confidence 0..1', async () => {
+      await savePendingScan(baseScan('scan_a'));
+      expect(FileSystem.copyAsync).toHaveBeenCalledWith({
+        from: 'file:///cache/prepared.jpg',
+        to: 'file:///docs/pending-scans/scan_a.jpg',
+      });
+      const queue = JSON.parse(await AsyncStorage.getItem('rootcare_sync_queue'));
+      expect(queue).toHaveLength(1);
+      expect(queue[0].payload.localImagePath).toBe('file:///docs/pending-scans/scan_a.jpg');
+      expect(queue[0].payload.imageBase64).toBeUndefined();
+      expect(queue[0].payload.confidence).toBeCloseTo(0.935);
+    });
+
+    test('8. saving the same scanId twice keeps ONE queue item', async () => {
+      await savePendingScan(baseScan('scan_b'));
+      await savePendingScan(baseScan('scan_b'));
+      const queue = JSON.parse(await AsyncStorage.getItem('rootcare_sync_queue'));
+      expect(queue).toHaveLength(1);
+    });
+
+    test('9. flush uploads with upsert:true, upserts row, then deletes file and queue item', async () => {
+      const upload = jest.fn().mockResolvedValue({ error: null });
+      supabase.storage.from.mockReturnValue({ upload, remove: jest.fn() });
+      const builder = mockScansBuilder();
+
+      await savePendingScan(baseScan('scan_c'));
+      const result = await flushQueue();
+
+      expect(result.flushed).toBe(1);
+      expect(upload).toHaveBeenCalledWith(
+        'test_user/scan_c.jpg', expect.anything(), expect.objectContaining({ upsert: true })
+      );
+      expect(builder.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'scan_c', image_path: 'test_user/scan_c.jpg' }),
+        { onConflict: 'id' }
+      );
+      expect(FileSystem.deleteAsync).toHaveBeenLastCalledWith(
+        'file:///docs/pending-scans/scan_c.jpg', { idempotent: true }
+      );
+      expect(JSON.parse(await AsyncStorage.getItem('rootcare_sync_queue'))).toHaveLength(0);
+    });
+
+    test('10. upload ok but row upsert fails -> item and local file kept; retry uses upsert (no duplicate)', async () => {
+      const upload = jest.fn().mockResolvedValue({ error: null });
+      supabase.storage.from.mockReturnValue({ upload, remove: jest.fn() });
+      let calls = 0;
+      const builder = mockScansBuilder(() =>
+        Promise.resolve(++calls === 1 ? { error: new Error('db down') } : { error: null })
+      );
+
+      await savePendingScan(baseScan('scan_d'));
+      FileSystem.deleteAsync.mockClear();
+
+      const first = await flushQueue();
+      expect(first.flushed).toBe(0);
+      expect(first.failed).toBe(1);
+      expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
+      expect(JSON.parse(await AsyncStorage.getItem('rootcare_sync_queue'))).toHaveLength(1);
+
+      const second = await flushQueue();
+      expect(second.flushed).toBe(1);
+      expect(builder.upsert).toHaveBeenCalledTimes(2);
+      expect(upload).toHaveBeenCalledTimes(2); // same path, upsert:true -> overwrite, not a 2nd object
+      expect(JSON.parse(await AsyncStorage.getItem('rootcare_sync_queue'))).toHaveLength(0);
+    });
+
+    test('11. concurrent flushQueue() calls do not double-process', async () => {
+      const upload = jest.fn().mockResolvedValue({ error: null });
+      supabase.storage.from.mockReturnValue({ upload, remove: jest.fn() });
+      mockScansBuilder();
+
+      await savePendingScan(baseScan('scan_e'));
+      await Promise.all([flushQueue(), flushQueue(), flushQueue()]);
+      expect(upload).toHaveBeenCalledTimes(1);
+    });
   });
 });

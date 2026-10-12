@@ -11,6 +11,7 @@ import * as Haptics from 'expo-haptics';
 import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../utils/supabaseClient';
+import { flushQueue, removeScanAssets, resolveScanImageUris } from '../utils/syncManager';
 
 const { width } = Dimensions.get('window');
 
@@ -134,6 +135,9 @@ const HistoryScreen = ({ navigation, route }) => {
         return;
       }
 
+      // let any just-saved scan finish uploading so it shows up in the list
+      try { await flushQueue(); } catch (_) {}
+
       const { data, error } = await supabase
         .from('scans')
         .select('*')
@@ -144,7 +148,7 @@ const HistoryScreen = ({ navigation, route }) => {
         console.warn('Load scans failed:', error.message);
         setHistoryData([]);
       } else {
-        setHistoryData((data || []).map(mapRowToItem));
+        setHistoryData((await resolveScanImageUris(data || [])).map(mapRowToItem));
       }
     } catch (err) {
       console.warn('Load scans error:', err.message);
@@ -308,6 +312,7 @@ const HistoryScreen = ({ navigation, route }) => {
           setHistoryData(prev);
           return;
         }
+        removeScanAssets([id]).catch((e) => console.warn('Storage cleanup failed:', e?.message));
         showSuccess('Deleted!', 'This scan has been permanently deleted.');
       },
     });
@@ -404,6 +409,7 @@ const HistoryScreen = ({ navigation, route }) => {
           setHistoryData(prev);
           return;
         }
+        removeScanAssets(ids).catch((e) => console.warn('Storage cleanup failed:', e?.message));
         showSuccess('Deleted!', 'Selected scans have been permanently deleted.');
       },
     });

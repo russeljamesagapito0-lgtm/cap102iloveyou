@@ -1,9 +1,9 @@
 // utils/offlineInference.js
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as ImageManipulator from 'expo-image-manipulator';
 import { Skia, ColorType, AlphaType } from '@shopify/react-native-skia';
 import { loadTensorflowModel } from 'react-native-fast-tflite';
+import { prepareScanImage } from './scanImage';
 
 // ---- Config ----
 const IMAGE_SIZE = 384;
@@ -202,11 +202,9 @@ const normalizeOutput = (raw) => {
 export const runOfflineInference = async (imageUri) => {
   const model = await loadOfflineModel();
 
-  const manipulated = await ImageManipulator.manipulateAsync(
-    imageUri,
-    [{ resize: { width: IMAGE_SIZE, height: IMAGE_SIZE } }],
-    { format: ImageManipulator.SaveFormat.JPEG, compress: 0.9 }
-  );
+  // Same operation as before (resize only, JPEG q0.9), now via the shared helper
+  // so the exact bitmap the model sees can also be saved with the scan.
+  const manipulated = await prepareScanImage(imageUri, { centerCrop: false });
 
   const { data: rgba, width, height } = await decodeImageNative(manipulated.uri);
 
@@ -296,6 +294,7 @@ export const runOfflineInference = async (imageUri) => {
     confidence: parseFloat((confidence * 100).toFixed(2)),
     detection_metrics: detectionMetrics,
     allProbabilities,
+    preparedImageUri: manipulated.uri, // the exact 384x384 JPEG the model received
     _offline: true,
   };
 };

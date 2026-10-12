@@ -5,7 +5,10 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { DISEASE_INFO } from '../constants/diseaseInfo';
 import { useTheme } from '../context/ThemeContext';
+import NetInfo from '@react-native-community/netinfo';
+import Toast from 'react-native-toast-message';
 import { supabase } from '../utils/supabaseClient';
+import { savePendingScan, flushQueue, generateScanId } from '../utils/syncManager';
 
 const { width, height } = Dimensions.get('window');
 
@@ -30,9 +33,12 @@ const findTabNavigator = (navigation) => {
 
 const ResultScreen = ({ route, navigation }) => {
   const { themeColors, isDarkMode } = useTheme();
-  const { imageUri, scanDate, diseaseKey, diseaseLabel, confidence } = route.params || {};
+  const { imageUri, preparedImageUri, scanDate, diseaseKey, diseaseLabel, confidence } = route.params || {};
   const [isSaved, setIsSaved] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [savedOffline, setSavedOffline] = useState(false);
+  const savingRef = useRef(false); // synchronous guard against double taps
+  const scanIdRef = useRef(null);  // one scan id per result screen, so retries never create a second row
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [savedModalVisible, setSavedModalVisible] = useState(false);
 
@@ -69,8 +75,11 @@ const ResultScreen = ({ route, navigation }) => {
   const formattedDate = scannedAt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   const formattedTime = scannedAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
+  // Local-first save: copy the 384px JPEG to pending-scans + enqueue ONE mutation, tell the
+  // user immediately, then (if online) kick off the upload. flushQueue() owns all Supabase writes.
   const saveResult = async () => {
-    if (isSaving) return;
+    if (savingRef.current || isSavedRef.current) return isSavedRef.current;
+    savingRef.current = true;
 
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     setIsSaving(true);
@@ -80,51 +89,60 @@ const ResultScreen = ({ route, navigation }) => {
 
       if (!session?.user?.id) {
         setIsSaved(true);
-        return;
+        return true;
       }
 
       const diseaseType = diseaseData.type || diseaseData.diseaseType || 'Unknown';
-      const diseaseSeverity = diseaseData.severity || null;
       const diseaseAccuracy = typeof confidence === 'number'
         ? confidence
         : (confidence ? parseFloat(confidence) : null);
 
-      const payload = {
-        user_id: session.user.id,
-        crop_type: diseaseData.crop || 'Cassava',
-        image_path: imageUri || null,
-        captured_at: scannedAt.toISOString(),
-        is_saved: true,
-        is_archived: false,
-        is_deleted: false,
-        disease_code: DISEASE_INFO[diseaseKey] ? diseaseKey : null,
-        disease_name: diseaseData.name,
-        disease_type: diseaseType,
-        severity: diseaseSeverity,
-        accuracy: diseaseAccuracy,
-        // Admin panel reads `confidence` as a 0..1 value
-        confidence: diseaseAccuracy != null && Number.isFinite(diseaseAccuracy)
-          ? Math.min(Math.max(diseaseAccuracy / 100, 0), 1)
-          : null,
+      if (!scanIdRef.current) scanIdRef.current = generateScanId();
+
+      await savePendingScan({
+        scanId: scanIdRef.current,
+        userId: session.user.id,
+        preparedImageUri,
+        cropType: diseaseData.crop || 'Cassava',
+        capturedAt: scannedAt.toISOString(),
+        diseaseCode: DISEASE_INFO[diseaseKey] ? diseaseKey : null, // only known codes
+        diseaseName: diseaseData.name,
+        diseaseType,
+        severity: diseaseData.severity || null,
+        accuracy: Number.isFinite(diseaseAccuracy) ? diseaseAccuracy : null, // 0..100
         description: diseaseData.description || null,
         treatment: diseaseData.treatment || null,
         prevention: diseaseData.prevention || null,
         symptoms: diseaseData.symptoms || null,
-      };
+      });
 
-      const { error } = await supabase.from('scans').insert(payload);
+      let online = false;
+      try {
+        const net = await NetInfo.fetch();
+        online = !!net.isConnected && net.isInternetReachable !== false;
+      } catch (_) {}
 
-      if (error) {
-        console.warn('Failed to save scan:', error.message);
-        Alert.alert('Save failed', error.message);
-        return;
+      if (isMountedRef.current) {
+        setIsSaved(true);
+        setSavedOffline(!online);
       }
+      Toast.show({
+        type: 'success',
+        text1: 'Saved',
+        text2: online ? 'Scan saved.' : "Saved. Will upload when you're online",
+        visibilityTime: 2500,
+      });
 
-      if (isMountedRef.current) setIsSaved(true);
+      if (online) {
+        flushQueue().catch((e) => console.warn('Queue flush failed:', e?.message));
+      }
+      return true;
     } catch (err) {
       console.warn('Save error:', err);
-      Alert.alert('Save failed', err.message || 'Unknown error');
+      Alert.alert('Save failed', err?.message || 'Unknown error');
+      return false;
     } finally {
+      savingRef.current = false;
       if (isMountedRef.current) setIsSaving(false);
     }
   };
@@ -152,7 +170,8 @@ const ResultScreen = ({ route, navigation }) => {
   const navigateToScanAgain = () => showModal(goToScanner);
 
   const handleSaveAndContinue = async () => {
-    await saveResult();
+    const ok = await saveResult();
+    if (!ok) return; // keep the confirm dialog open so the user can retry
     setConfirmVisible(false);
     const action = pendingActionRef.current;
     pendingActionRef.current = null;
@@ -281,7 +300,7 @@ const ResultScreen = ({ route, navigation }) => {
               <Ionicons name="checkmark" size={32} color={themeColors['on-primary']} />
             </View>
             <Text style={[styles.savedModalTitle, { color: themeColors.text }]}>Saved!</Text>
-            <Text style={[styles.savedModalBody, { color: themeColors.textSecondary }]}>Scan result has been saved to history.</Text>
+            <Text style={[styles.savedModalBody, { color: themeColors.textSecondary }]}>{savedOffline ? "Saved. Will upload when you're online." : 'Scan result has been saved to history.'}</Text>
           </View>
         </View>
       </Modal>

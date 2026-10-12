@@ -108,6 +108,22 @@ const AppNavigator = () => {
     return () => unsub();
   }, []);
 
+  // Flush pending saves on app start / login and whenever the app returns to the foreground.
+  // (Reconnect is handled by the NetInfo listener above. flushQueue is single-flight, so
+  // overlapping triggers are safe.)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const flush = () =>
+      flushQueue().catch((e) => console.warn('Queue flush failed:', e?.message));
+
+    flush();
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'active') flush();
+    });
+    return () => sub.remove();
+  }, [isAuthenticated]);
+
   if (isLoading || themeLoading || !maintenanceChecked) {
     return (
       <View

@@ -4,15 +4,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
-import * as ImageManipulator from 'expo-image-manipulator';
 import * as Haptics from 'expo-haptics';
 import Toast from 'react-native-toast-message';
 import { useFocusEffect } from '@react-navigation/native';
 import NetInfo from '@react-native-community/netinfo';
 import { runOfflineInference, loadOfflineModel } from '../utils/offlineInference';
-import { enqueueMutation, generateScanId, flushQueue } from '../utils/syncManager';
+import { prepareScanImage } from '../utils/scanImage';
 import { DISEASE_INFO } from '../constants/diseaseInfo';
-import * as FileSystem from 'expo-file-system/legacy';
 import { analyzeCropImage } from '../utils/aiClient';
 
 const { width, height } = Dimensions.get('window');
@@ -87,20 +85,8 @@ const ScannerScreen = ({ navigation, route }) => {
       .then(() => setOfflineReady(true))
       .catch((err) => console.warn('Offline model unavailable:', err?.message));
 
-    let wasConnected = true;
     const unsub = NetInfo.addEventListener((state) => {
-      const connected = !!state.isConnected && state.isInternetReachable !== false;
-      setIsOnline(connected);
-
-      if (connected && !wasConnected) {
-        if (DEBUG) console.log('Back online — flushing sync queues');
-        flushQueue()
-          .then((res) => {
-            if (res?.flushed > 0 && DEBUG) console.log(' Queue flushed:', res);
-          })
-          .catch((e) => console.warn('Queue flush failed:', e));
-      }
-      wasConnected = connected;
+      setIsOnline(!!state.isConnected && state.isInternetReachable !== false);
     });
 
     return () => unsub();
@@ -158,47 +144,29 @@ const ScannerScreen = ({ navigation, route }) => {
     }
   };
 
+  // Online path: center-crop + 384x384 JPEG q0.9 (shared helper). Returns the base64
+  // sent to the server AND the file uri of that exact bitmap, so Save can keep it.
   const preprocessImage = async (imageUri) => {
-    const { width: imgW, height: imgH } = await ImageManipulator.manipulateAsync(
-      imageUri,
-      [],
-      {}
-    );
+    const prepared = await prepareScanImage(imageUri, {
+      centerCrop: true,
+      cropFraction: CROP_FRACTION,
+    });
 
-    const shortSide = Math.min(imgW, imgH);
-    const cropSize = Math.round(shortSide * CROP_FRACTION);
-    const originX = Math.round((imgW - cropSize) / 2);
-    const originY = Math.round((imgH - cropSize) / 2);
-
-    const manipulatedImage = await ImageManipulator.manipulateAsync(
-      imageUri,
-      [
-        {
-          crop: {
-            originX,
-            originY,
-            width: cropSize,
-            height: cropSize,
-          },
-        },
-        { resize: { width: 384, height: 384 } },
-      ],
-      { format: ImageManipulator.SaveFormat.JPEG, compress: 0.9 }
-    );
-
-    const response = await fetch(manipulatedImage.uri);
+    const response = await fetch(prepared.uri);
     const blob = await response.blob();
-    return new Promise((resolve, reject) => {
+    const base64 = await new Promise((resolve, reject) => {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result.split(',')[1]);
       reader.onerror = reject;
       reader.readAsDataURL(blob);
     });
+    return { base64, preparedUri: prepared.uri };
   };
 
-  const navigateToResult = (result, imageUri) => {
+  const navigateToResult = (result, imageUri, preparedImageUri) => {
     navigation.navigate('Result', {
       imageUri,
+      preparedImageUri: preparedImageUri || null,
       diseaseKey: result.diseaseKey || 'UNKNOWN',
       diseaseLabel: result.diseaseName || 'Unknown Disease',
       confidence: result.confidence || 0,
@@ -213,31 +181,6 @@ const ScannerScreen = ({ navigation, route }) => {
       offline: !!result._offline,
       enhancedByAI: !!result._enhancedByAI,
     });
-  };
-
-  const queueOfflineScan = async (imageUri, result) => {
-    try {
-      const base64Image = await FileSystem.readAsStringAsync(imageUri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      const scanId = generateScanId();
-      await enqueueMutation({
-        type: 'CREATE_SCAN',
-        scanId,
-        payload: {
-          imageBase64: base64Image,
-          cropType: 'cassava',
-          capturedAt: new Date().toISOString(),
-          diagnosisCode: result.diseaseKey,
-          confidence: result.confidence,
-          modelVersion: 'convnext-384-tflite-v1',
-          inferredAt: new Date().toISOString(),
-        },
-      });
-      if (DEBUG) console.log('Offline scan queued:', scanId);
-    } catch (e) {
-      console.warn('Failed to queue offline scan:', e);
-    }
   };
 
   const normalizeGeminiResult = (geminiData, fallbackResult) => {
@@ -287,7 +230,7 @@ const ScannerScreen = ({ navigation, route }) => {
 
     if (isApiReady && isOnline) {
       try {
-        const base64Image = await preprocessImage(image);
+        const { base64: base64Image, preparedUri } = await preprocessImage(image);
 
         const response = await fetchWithTimeout(API_URL, {
           method: 'POST',
@@ -319,7 +262,7 @@ const ScannerScreen = ({ navigation, route }) => {
 
         if (result.success) {
           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-          navigateToResult(result, image);
+          navigateToResult(result, image, preparedUri);
           setLoading(false);
           return;
         }
@@ -402,16 +345,14 @@ const ScannerScreen = ({ navigation, route }) => {
         Toast.show({
           type: 'info',
           text1: 'Offline Result',
-          text2: 'Saved locally — will sync when online.',
+          text2: 'Tap Save on the result to keep it. It uploads when you are online.',
           visibilityTime: 3000,
         });
       }
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
 
-      await queueOfflineScan(image, tfliteResult);
-
-      navigateToResult(enriched, image);
+      navigateToResult(enriched, image, tfliteResult.preparedImageUri);
     } catch (error) {
       console.error('Offline inference failed:', error);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
