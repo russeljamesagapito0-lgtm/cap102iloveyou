@@ -1,4 +1,5 @@
 import { supabase, logAudit } from './supabase';
+import { buildZip } from './zip';
 
 export const BACKUP_TABLES = [
   'profiles',
@@ -26,20 +27,33 @@ async function fetchAll(table) {
   return rows;
 }
 
-// Returns { counts, filename } and triggers a JSON download.
+// jsonb / array columns come back as objects, so keep them as JSON text instead of "[object Object]"
+const cell = (value) => {
+  if (value == null) return '';
+  const s = typeof value === 'object' ? JSON.stringify(value) : String(value);
+  return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+};
+
+export function rowsToCsv(rows) {
+  if (!rows.length) return '';
+  const cols = [...new Set(rows.flatMap((r) => Object.keys(r)))];
+  const body = rows.map((r) => cols.map((c) => cell(r[c])).join(','));
+  return [cols.join(','), ...body].join('\r\n');
+}
+
+// Returns { counts, filename } and triggers a ZIP download with one CSV per table.
 export async function runBackup(onProgress = () => {}) {
-  const tables = {};
+  const files = [];
   const counts = {};
   for (const t of BACKUP_TABLES) {
     onProgress(t);
-    tables[t] = await fetchAll(t);
-    counts[t] = tables[t].length;
+    const rows = await fetchAll(t);
+    counts[t] = rows.length;
+    files.push({ name: `${t}.csv`, content: '\ufeff' + rowsToCsv(rows) });
   }
 
-  const payload = { created_at: new Date().toISOString(), counts, tables };
-  const filename = `rootcare-backup-${new Date().toISOString().slice(0, 10)}.json`;
-  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
+  const filename = `rootcare-backup-${new Date().toISOString().slice(0, 10)}.zip`;
+  const url = URL.createObjectURL(buildZip(files));
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;

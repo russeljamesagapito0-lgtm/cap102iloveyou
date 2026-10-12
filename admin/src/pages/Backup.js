@@ -31,7 +31,7 @@ export default function Backup() {
             Manual backup
           </div>
           <p className="page-subtitle">
-            Downloads {BACKUP_TABLES.join(', ')} as one JSON file. Not encrypted, store it safely.
+            Downloads {BACKUP_TABLES.join(', ')} as CSV files (one per table) in a single ZIP. Not encrypted, store it safely.
           </p>
         </div>
         <button className="btn btn-primary" onClick={start} disabled={running}>
