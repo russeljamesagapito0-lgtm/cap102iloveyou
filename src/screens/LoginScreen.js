@@ -100,10 +100,7 @@ const LoginScreen = ({ navigation }) => {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         let message = 'An error occurred during login.';
         if (error.message.includes('Invalid login credentials')) message = 'Invalid email or password. Please try again.';
-        else if (error.message.includes('Email not confirmed')) {
-          // Unverified account: send a fresh code and jump to the verification screen.
-          return navigation.navigate('VerifyEmail', { email: email.trim(), autoResend: true });
-        }
+        else if (error.message.includes('Email not confirmed')) message = 'Please confirm your email address before logging in.';
         return showModal('Error', message, 'error');
       }
 
@@ -307,4 +304,4 @@ const styles = StyleSheet.create({
   modalCancelButtonText: { fontSize: 15, fontWeight: '600', fontFamily: 'OpenSans_600SemiBold' },
 });
 
-export default LoginScreen; 
+export default LoginScreen;
