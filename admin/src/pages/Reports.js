@@ -1,8 +1,10 @@
+// src/pages/Reports.js
 import { useEffect, useMemo, useState } from 'react';
 import Icon from '../components/Icon';
 import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
 import { supabase, fmtDate, logAudit } from '../lib/supabase';
+import { useAuth } from '../context/AuthContext';
 import {
   fetchAll,
   addDays,
@@ -10,8 +12,10 @@ import {
   summarizeByDisease,
   pct,
   avgConfidence,
+  personName,
 } from '../lib/analytics';
 import { formatDetails, adminName } from './Audit';
+import { generateSummaryReportPdf, buildReportFilename } from '../lib/reportPdf';
 
 const SCAN_COLS =
   'id,created_at,user_id,region,disease_code,predicted_code,confidence,flagged,corrected,image_url,profiles(full_name,email)';
@@ -25,8 +29,21 @@ const PRESETS = [
 
 const dayStart = (s) => new Date(`${s}T00:00:00`);
 
+const formatRangeLabel = (from, to) => {
+  if (!from && !to) return 'All time';
+  const fmt = (s) => {
+    if (!s) return '';
+    const d = new Date(`${s}T00:00:00`);
+    return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+  };
+  if (from && to) return `${fmt(from)} – ${fmt(to)}`;
+  if (from) return `From ${fmt(from)}`;
+  return `Until ${fmt(to)}`;
+};
+
 export default function Reports() {
   const toast = useToast();
+  const { user } = useAuth();
   const today = toDateInput(new Date());
   const [from, setFrom] = useState(toDateInput(addDays(new Date(), -29)));
   const [to, setTo] = useState(today);
@@ -35,10 +52,11 @@ export default function Reports() {
   const [diseases, setDiseases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState('');
+  const [pdfBusy, setPdfBusy] = useState(false);
 
   const since = from ? dayStart(from).toISOString() : null;
   const until = to ? addDays(dayStart(to), 1).toISOString() : null;
-  const rangeLabel = from || to ? `${from || 'start'} to ${to || 'today'}` : 'All time';
+  const rangeLabel = formatRangeLabel(from, to);
   const fileTag = `${from || 'all'}_${to || 'all'}`;
 
   useEffect(() => {
@@ -73,6 +91,38 @@ export default function Reports() {
     () => new Set(scans.map((s) => s.user_id).filter(Boolean)).size,
     [scans]
   );
+
+  const topUsers = useMemo(() => {
+    const profMap = Object.fromEntries(profiles.map((p) => [p.id, p]));
+    const perUser = {};
+    scans.forEach((s) => {
+      if (s.user_id) perUser[s.user_id] = (perUser[s.user_id] || 0) + 1;
+    });
+    return Object.entries(perUser)
+      .map(([id, count]) => ({ id, count, name: personName(profMap[id]) }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 10);
+  }, [scans, profiles]);
+
+  const topCorrections = useMemo(() => {
+    const pairs = {};
+    scans.forEach((s) => {
+      if (!s.corrected || !s.predicted_code) return;
+      const key = `${s.predicted_code}>${s.disease_code}`;
+      pairs[key] = (pairs[key] || 0) + 1;
+    });
+    return Object.entries(pairs)
+      .map(([k, count]) => {
+        const [from_, to_] = k.split('>');
+        return {
+          from: names[from_] || from_,
+          to: names[to_] || to_,
+          count,
+        };
+      })
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
+  }, [scans, names]);
 
   const applyPreset = (p) => {
     setTo(p.days ? today : '');
@@ -141,6 +191,38 @@ export default function Reports() {
     }
   };
 
+  const handleDownloadPdf = async () => {
+    if (pdfBusy) return;
+    setPdfBusy(true);
+    try {
+      const doc = generateSummaryReportPdf({
+        summary,
+        total: scans.length,
+        activeUsers,
+        avgConf: avgConfidence(scans),
+        rangeLabel,
+        generatedBy: user?.full_name || user?.email || 'Admin',
+        topUsers,
+        topCorrections,
+      });
+      doc.save(buildReportFilename(rangeLabel));
+
+      logAudit('report.export', 'report', 'summary_pdf', {
+        report: 'summary',
+        scans: scans.length,
+        from: from || null,
+        to: to || null,
+      });
+
+      toast.success('PDF downloaded');
+    } catch (e) {
+      console.error('PDF generation failed:', e);
+      toast.error(`PDF generation failed: ${e.message}`);
+    } finally {
+      setPdfBusy(false);
+    }
+  };
+
   const REPORTS = [
     { title: 'Scan report', desc: 'Every scan in the range with user, region, predicted vs final label and confidence.', count: `${scans.length} rows`, run: exportScans },
     { title: 'User report', desc: 'All users with plan, status, last activity and how many scans they made in the range.', count: `${profiles.length} rows`, run: exportUsers },
@@ -194,8 +276,8 @@ export default function Reports() {
             <div className="chart-title">Summary report</div>
             <div className="chart-sub">RootCare · {rangeLabel} · generated {fmtDate(new Date().toISOString())}</div>
           </div>
-          <button className="btn btn-primary btn-sm no-print" onClick={() => window.print()} disabled={loading}>
-            Print / Save as PDF
+          <button className="btn btn-primary btn-sm no-print" onClick={handleDownloadPdf} disabled={loading || pdfBusy}>
+            <Icon name="download" size={14} /> {pdfBusy ? 'Generating…' : 'Download PDF'}
           </button>
         </div>
 
