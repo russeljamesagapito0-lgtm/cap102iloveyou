@@ -2,6 +2,7 @@
   "expo": {
     "name": "RootCare",
     "slug": "rootcare",
+    "scheme": "rootcare",
     "version": "1.0.0",
     "orientation": "portrait",
     "userInterfaceStyle": "light",
@@ -39,6 +40,7 @@
       "expo-camera",
       "expo-file-system",
       "expo-secure-store",
+      "expo-web-browser",
       "react-native-fast-tflite",
       "expo-asset"
     ],

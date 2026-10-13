@@ -10,6 +10,7 @@ import * as Haptics from 'expo-haptics';
 import { supabase } from '../utils/supabaseClient';
 import { useTheme } from '../context/ThemeContext';
 import { fetchAccountStatus, SUSPENDED_TITLE, SUSPENDED_MESSAGE } from '../utils/accountStatus';
+import { signInWithGoogle } from '../utils/googleAuth';
 
 const CustomModal = ({ visible, onClose, title, message, type = 'success', onConfirm, themeColors }) => {
   const getIcon = () => {
@@ -65,6 +66,7 @@ const LoginScreen = ({ navigation, route }) => {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [emailFocused, setEmailFocused] = useState(false);
   const [passwordFocused, setPasswordFocused] = useState(false);
   const [modalVisible, setModalVisible] = useState(false);
@@ -171,6 +173,27 @@ const LoginScreen = ({ navigation, route }) => {
     }
   };
 
+  const handleGoogleLogin = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setIsGoogleLoading(true);
+    try {
+      const res = await signInWithGoogle();
+      if (res.status === 'cancelled') return;
+      if (res.status === 'suspended') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return showModal(SUSPENDED_TITLE, SUSPENDED_MESSAGE, 'suspended');
+      }
+      if (res.status === 'error') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return showModal('Google Sign In', res.message, 'error');
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      navigation.replace('MainTabs');
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  };
+
   const handleGuestLogin = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     showModal('Guest Mode', "Continue as a guest? You'll have limited access to features.", 'warning', () => {
@@ -267,12 +290,19 @@ const LoginScreen = ({ navigation, route }) => {
         </View>
 
         <TouchableOpacity
-          style={[styles.googleButton, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}
-          onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); showModal('Google Sign In', 'Google authentication will be available soon!', 'info'); }}
+          style={[styles.googleButton, { backgroundColor: themeColors.surface, borderColor: themeColors.border }, isGoogleLoading && styles.loginButtonDisabled]}
+          onPress={handleGoogleLogin}
           activeOpacity={0.7}
+          disabled={isGoogleLoading || isLoading}
         >
-          <View style={styles.googleIcon}><Text style={styles.googleIconText}>G</Text></View>
-          <Text style={[styles.googleButtonText, { color: themeColors.text }]}>Continue with Google</Text>
+          {isGoogleLoading ? (
+            <ActivityIndicator size="small" color={themeColors.primary} />
+          ) : (
+            <>
+              <View style={styles.googleIcon}><Text style={styles.googleIconText}>G</Text></View>
+              <Text style={[styles.googleButtonText, { color: themeColors.text }]}>Continue with Google</Text>
+            </>
+          )}
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.guestButton} onPress={handleGuestLogin} activeOpacity={0.7}>

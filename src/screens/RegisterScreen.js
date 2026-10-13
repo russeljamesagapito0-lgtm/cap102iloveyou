@@ -18,6 +18,8 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../utils/supabaseClient';
+import { signInWithGoogle } from '../utils/googleAuth';
+import { SUSPENDED_TITLE, SUSPENDED_MESSAGE } from '../utils/accountStatus';
 import { useTheme } from '../context/ThemeContext';
 import SelectField from '../components/SelectField';
 import { fetchRegions, fetchProvinces, fetchRegionCities, fetchProvinceCities, fetchBarangays } from '../utils/psgcClient';
@@ -300,6 +302,7 @@ const RegisterScreen = ({ navigation }) => {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [isTermsChecked, setIsTermsChecked] = useState(false);
   const [isSuffixDropdownOpen, setIsSuffixDropdownOpen] = useState(false);
   const [age, setAge] = useState('');
@@ -498,6 +501,32 @@ const RegisterScreen = ({ navigation }) => {
       setIsLoading(false);
     }
   }, [validateForm, formData, noMiddleName, navigation, profileImage, addr.regionName]);
+
+  const handleGoogleSignUp = useCallback(async () => {
+    if (!isTermsChecked) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      showModal('Terms Required', 'Please agree to the Terms of Service and Privacy Policy to continue.', 'warning');
+      return;
+    }
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setIsGoogleLoading(true);
+    try {
+      const res = await signInWithGoogle();
+      if (res.status === 'cancelled') return;
+      if (res.status === 'suspended') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return showModal(SUSPENDED_TITLE, SUSPENDED_MESSAGE, 'suspended');
+      }
+      if (res.status === 'error') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        return showModal('Google Sign Up', res.message, 'error');
+      }
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      navigation.replace('MainTabs');
+    } finally {
+      setIsGoogleLoading(false);
+    }
+  }, [isTermsChecked, navigation]);
 
   const handleLogin = useCallback(() => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -772,6 +801,22 @@ const RegisterScreen = ({ navigation }) => {
               <View style={[styles.dividerLine, { backgroundColor: themeColors.border }]} />
             </View>
 
+            <TouchableOpacity
+              style={[styles.googleButton, { backgroundColor: themeColors.surface, borderColor: themeColors.border }, isGoogleLoading && { opacity: 0.6 }]}
+              onPress={handleGoogleSignUp}
+              activeOpacity={0.7}
+              disabled={isGoogleLoading || isLoading}
+            >
+              {isGoogleLoading ? (
+                <ActivityIndicator size="small" color={themeColors.primary} />
+              ) : (
+                <>
+                  <View style={styles.googleIcon}><Text style={styles.googleIconText}>G</Text></View>
+                  <Text style={[styles.googleButtonText, { color: themeColors.text }]}>Sign up with Google</Text>
+                </>
+              )}
+            </TouchableOpacity>
+
             <View style={styles.loginContainer}>
               <Text style={[styles.loginText, { color: themeColors.textSecondary }]}>Already have an account?</Text>
               <TouchableOpacity onPress={handleLogin} activeOpacity={0.7}>
@@ -835,6 +880,10 @@ const styles = StyleSheet.create({
   termsText: { fontSize: 14, flex: 1 },
   signUpButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 8, height: 48, gap: 8 },
   signUpButtonText: { fontSize: 14, fontWeight: '600' },
+  googleButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 8, height: 48, gap: 12, marginBottom: 16 },
+  googleIcon: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#4285F4', alignItems: 'center', justifyContent: 'center' },
+  googleIconText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  googleButtonText: { fontSize: 14, fontWeight: '600' },
   dividerContainer: { flexDirection: 'row', alignItems: 'center', gap: 16, marginTop: 16, marginBottom: 16 },
   dividerLine: { flex: 1, height: 1 },
   dividerText: { fontSize: 12, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.5 },
