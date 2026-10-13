@@ -1,5 +1,5 @@
 // screens/LoginScreen.js
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Platform,  
   KeyboardAvoidingView, ScrollView, ActivityIndicator, Image, Modal,
@@ -9,12 +9,14 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { supabase } from '../utils/supabaseClient';
 import { useTheme } from '../context/ThemeContext';
+import { fetchAccountStatus, SUSPENDED_TITLE, SUSPENDED_MESSAGE } from '../utils/accountStatus';
 
 const CustomModal = ({ visible, onClose, title, message, type = 'success', onConfirm, themeColors }) => {
   const getIcon = () => {
     switch (type) {
       case 'success': return { name: 'checkmark-circle', color: '#27AE60' };
       case 'error': return { name: 'alert-circle', color: themeColors.error };
+      case 'suspended': return { name: 'ban', color: themeColors.error };
       case 'warning': return { name: 'warning', color: '#F39C12' };
       default: return { name: 'information-circle', color: themeColors.primary };
     }
@@ -36,9 +38,9 @@ const CustomModal = ({ visible, onClose, title, message, type = 'success', onCon
           <Text style={[styles.modalTitle, { color: themeColors.text }]}>{title}</Text>
           <Text style={[styles.modalMessage, { color: themeColors.textSecondary }]}>{message}</Text>
           <View style={styles.modalButtonContainer}>
-            {type === 'success' ? (
+            {type === 'success' || type === 'suspended' ? (
               <TouchableOpacity style={[styles.modalButton, { backgroundColor: themeColors.primary }]} onPress={handleActionPress} activeOpacity={0.8}>
-                <Text style={[styles.modalButtonText, { color: themeColors['on-primary'] }]}>Continue</Text>
+                <Text style={[styles.modalButtonText, { color: themeColors['on-primary'] }]}>{type === 'suspended' ? 'OK' : 'Continue'}</Text>
               </TouchableOpacity>
             ) : (
               <>
@@ -57,7 +59,7 @@ const CustomModal = ({ visible, onClose, title, message, type = 'success', onCon
   );
 };
 
-const LoginScreen = ({ navigation }) => {
+const LoginScreen = ({ navigation, route }) => {
   const { themeColors, isDarkMode } = useTheme();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -76,6 +78,15 @@ const LoginScreen = ({ navigation }) => {
     setModalOnConfirm(() => onConfirm); setModalVisible(true);
   };
   const closeModal = () => setModalVisible(false);
+
+  // App.js sends suspended users back here (e.g. suspended while already logged in).
+  useEffect(() => {
+    if (route?.params?.suspended) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      showModal(SUSPENDED_TITLE, SUSPENDED_MESSAGE, 'suspended');
+      navigation.setParams({ suspended: false });
+    }
+  }, [route?.params?.suspended]);
 
   const handleLogin = async () => {
     if (!email || !password) {
@@ -118,6 +129,18 @@ const LoginScreen = ({ navigation }) => {
         if (error.message.includes('Invalid login credentials')) message = 'Invalid email or password. Please try again.';
         else if (error.message.includes('Email not confirmed')) message = 'Please confirm your email address before logging in.';
         return showModal('Error', message, 'error');
+      }
+
+      // Suspension check: an admin sets profiles.status = 'suspended'.
+      // Sign the user straight back out so they never reach the app.
+      const accountStatus = await fetchAccountStatus(data.user.id);
+      if (accountStatus !== 'active') {
+        await supabase.auth.signOut().catch(() => {});
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+        if (accountStatus === 'suspended') {
+          return showModal(SUSPENDED_TITLE, SUSPENDED_MESSAGE, 'suspended');
+        }
+        return showModal('Error', "We couldn't verify your account right now. Please try again.", 'error');
       }
 
       // ============================================================

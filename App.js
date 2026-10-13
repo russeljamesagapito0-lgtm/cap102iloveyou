@@ -1,7 +1,7 @@
 ﻿import { Buffer } from 'buffer';
 global.Buffer = global.Buffer || Buffer;
 import React, { useState, useEffect } from 'react';
-import { NavigationContainer, DefaultTheme as NavDefaultTheme, DarkTheme as NavDarkTheme } from '@react-navigation/native';
+import { NavigationContainer, CommonActions, createNavigationContainerRef, DefaultTheme as NavDefaultTheme, DarkTheme as NavDarkTheme } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { View, ActivityIndicator, AppState } from 'react-native';
 import Toast from 'react-native-toast-message';
@@ -22,10 +22,14 @@ import { fetchMaintenance, DEFAULT_MAINTENANCE } from './src/utils/appConfig';
 
 import { loadOfflineModel } from './src/utils/offlineInference';
 import { flushQueue } from './src/utils/syncManager';
+import { fetchAccountStatus } from './src/utils/accountStatus';
 
 const Stack = createStackNavigator();
 
 const MAINTENANCE_POLL_MS = 30 * 1000;
+const SUSPENSION_POLL_MS = 60 * 1000;
+
+const navigationRef = createNavigationContainerRef();
 
 const AppNavigator = () => {
   const { themeColors, isDarkMode, isLoading: themeLoading } = useTheme();
@@ -81,6 +85,46 @@ const AppNavigator = () => {
       authListener?.subscription.unsubscribe();
     };
   }, []);
+
+  // Suspended while already logged in (or opening the app with a saved session):
+  // sign out and send them to Login, which shows the suspension notice.
+  // Network errors fail open so offline use keeps working; the login screen
+  // itself fails closed.
+  const enforceSuspension = React.useCallback(async () => {
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session?.user) return;
+      // The Login screen runs its own check right after sign-in.
+      const route = navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : null;
+      if (route === 'Login' || route === 'Onboarding') return;
+
+      const status = await fetchAccountStatus(session.user.id);
+      if (status !== 'suspended') return;
+
+      await supabase.auth.signOut().catch(() => {});
+      setIsAuthenticated(false);
+      if (navigationRef.isReady()) {
+        navigationRef.dispatch(
+          CommonActions.reset({ index: 0, routes: [{ name: 'Login', params: { suspended: true } }] })
+        );
+      }
+    } catch (e) {
+      console.warn('Suspension check failed:', e?.message);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    enforceSuspension();
+    const interval = setInterval(enforceSuspension, SUSPENSION_POLL_MS);
+    const sub = AppState.addEventListener('change', (st) => {
+      if (st === 'active') enforceSuspension();
+    });
+    return () => {
+      clearInterval(interval);
+      sub.remove();
+    };
+  }, [isAuthenticated, enforceSuspension]);
 
   useEffect(() => {
     loadOfflineModel()
@@ -163,7 +207,7 @@ const AppNavigator = () => {
   };
 
   return (
-    <NavigationContainer theme={navigationTheme}>
+    <NavigationContainer ref={navigationRef} theme={navigationTheme}>
       <Stack.Navigator
         screenOptions={{ headerShown: false }}
         initialRouteName={isAuthenticated ? 'MainTabs' : 'Onboarding'}
