@@ -1,5 +1,5 @@
 ﻿// screens/ChatbotScreen.js
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -24,6 +24,15 @@ import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
 import { useTheme } from '../context/ThemeContext';
 import { sendChatMessage, sendChatWithImage } from '../utils/aiClient';
+import {
+  loadChats,
+  loadMessages,
+  createChat,
+  appendMessage,
+  renameChat,
+  deleteChat,
+  deriveTitleFromFirstUserMessage,
+} from '../utils/chatStore';
 
 const { width } = Dimensions.get('window');
 const SIDEBAR_WIDTH = Math.min(340, width * 0.85);
@@ -35,16 +44,51 @@ const findTabNavigator = (navigation) => {
   return nav;
 };
 
-const INITIAL_MESSAGE = {
-  id: 'init',
-  text: "Hello! I'm RootCare Companion. Ask me anything about cassava or root crop farming — or attach a photo of a leaf for a quick check.",
+const WELCOME_TEXT =
+  "Hello! I'm RootCare Companion. Ask me anything about cassava or root crop farming — or attach a photo of a leaf for a quick check.";
+
+const makeWelcomeMessage = () => ({
+  id: 'welcome',
+  text: WELCOME_TEXT,
   sender: 'bot',
+  isWelcome: true,
+});
+
+const formatSidebarDate = (iso) => {
+  if (!iso) return '';
+  try {
+    const d = new Date(iso);
+    const today = new Date();
+    const same =
+      d.getFullYear() === today.getFullYear() &&
+      d.getMonth() === today.getMonth() &&
+      d.getDate() === today.getDate();
+    if (same) {
+      return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+    }
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  } catch {
+    return '';
+  }
+};
+
+const previewFromChat = (chat, messagesByChat) => {
+  const msgs = messagesByChat[chat.id];
+  if (!msgs || msgs.length === 0) return 'No messages yet';
+  const last = msgs[msgs.length - 1];
+  const text = last.text?.trim() || 'Photo attachment';
+  return text.length > 60 ? text.slice(0, 59) + '…' : text;
 };
 
 const ChatbotScreen = ({ navigation }) => {
-  const { themeColors, isDarkMode } = useTheme();
+  const { themeColors } = useTheme();
 
-  const [messages, setMessages] = useState([INITIAL_MESSAGE]);
+  const [chats, setChats] = useState([]);               // sidebar list
+  const [activeChatId, setActiveChatId] = useState(null);
+  const [messages, setMessages] = useState([]);         // active conversation
+  const [messagesByChat, setMessagesByChat] = useState({}); // cache for sidebar previews
+  const [booting, setBooting] = useState(true);
+
   const [inputText, setInputText] = useState('');
   const [suggestedTopics] = useState([
     { id: '1', text: 'What are the best root crop varieties to plant?', icon: 'leaf-outline' },
@@ -64,11 +108,12 @@ const ChatbotScreen = ({ navigation }) => {
   const flatListRef = useRef(null);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
-  // Animated dots for typing indicator
+  // Typing indicator dots
   const dot1 = useRef(new Animated.Value(0.3)).current;
   const dot2 = useRef(new Animated.Value(0.3)).current;
   const dot3 = useRef(new Animated.Value(0.3)).current;
 
+  // Hide bottom tab bar while on this screen
   useFocusEffect(
     React.useCallback(() => {
       const tabNavigator = findTabNavigator(navigation);
@@ -96,7 +141,6 @@ const ChatbotScreen = ({ navigation }) => {
     };
   }, []);
 
-  // Typing indicator animation
   useEffect(() => {
     if (!isSending) return;
     const animate = (dot, delay) =>
@@ -114,39 +158,120 @@ const ChatbotScreen = ({ navigation }) => {
     return () => { a1.stop(); a2.stop(); a3.stop(); };
   }, [isSending, dot1, dot2, dot3]);
 
+  // ---------------------------------------------------------------------------
+  // Bootstrap: load the sidebar list, then open the most recent chat (or create one)
+  // ---------------------------------------------------------------------------
+  const refreshChats = useCallback(async () => {
+    const list = await loadChats();
+    setChats(list);
+    return list;
+  }, []);
+
+  const openChat = useCallback(async (chatId) => {
+    const msgs = await loadMessages(chatId);
+    setActiveChatId(chatId);
+    setMessages(msgs.length ? msgs : [makeWelcomeMessage()]);
+    setShowSuggestions(msgs.length === 0);
+    setAttachments([]);
+    setMessagesByChat((prev) => ({ ...prev, [chatId]: msgs }));
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setBooting(true);
+      const list = await refreshChats();
+      if (cancelled) return;
+
+      if (list.length > 0) {
+        await openChat(list[0].id);
+      } else {
+        const created = await createChat('New Chat');
+        if (cancelled) return;
+        if (created) {
+          setChats([created]);
+          setActiveChatId(created.id);
+          setMessages([makeWelcomeMessage()]);
+          setShowSuggestions(true);
+        } else {
+          // Couldn't create — still show a usable, session-only chat
+          setMessages([makeWelcomeMessage()]);
+          setShowSuggestions(true);
+        }
+      }
+      if (!cancelled) setBooting(false);
+    })();
+    return () => { cancelled = true; };
+  }, [refreshChats, openChat]);
+
+  // ---------------------------------------------------------------------------
+  // Sidebar open/close
+  // ---------------------------------------------------------------------------
   const openHistory = () => {
     setShowHistory(true);
     Animated.timing(slideAnim, { toValue: 0, duration: 280, useNativeDriver: true }).start();
   };
 
   const closeHistory = () => {
-    Animated.timing(slideAnim, { toValue: -SIDEBAR_WIDTH, duration: 240, useNativeDriver: true }).start(() => setShowHistory(false));
+    Animated.timing(slideAnim, { toValue: -SIDEBAR_WIDTH, duration: 240, useNativeDriver: true })
+      .start(() => setShowHistory(false));
   };
 
-  // ---------- SEND MESSAGE (the real deal) ----------
+  // ---------------------------------------------------------------------------
+  // Send message: persist both turns, then reflect in the UI
+  // ---------------------------------------------------------------------------
+  const persistMessage = async (chatId, message) => {
+    if (!chatId) return message;
+    const row = await appendMessage(chatId, {
+      sender: message.sender,
+      text: message.text,
+      image: message.image || null,
+      isError: !!message.isError,
+    });
+    if (!row) return message;
+    // Preserve any local-only fields on top of the server row
+    return { ...message, id: row.id, createdAt: row.created_at };
+  };
+
+  const maybeRetitleFromFirstUserMessage = async (chatId, updatedMessages) => {
+    if (!chatId) return;
+    const current = chats.find((c) => c.id === chatId);
+    if (!current) return;
+    if (current.title && current.title !== 'New Chat') return;
+    const hasUserMessage = updatedMessages.some((m) => m.sender === 'user' && m.text?.trim());
+    if (!hasUserMessage) return;
+
+    const newTitle = deriveTitleFromFirstUserMessage(updatedMessages);
+    const ok = await renameChat(chatId, newTitle);
+    if (ok) {
+      setChats((prev) => prev.map((c) => (c.id === chatId ? { ...c, title: newTitle } : c)));
+    }
+  };
+
   const sendMessage = async (text) => {
     if (isSending) return;
-    if (!text || !text.trim()) {
-      // Allow sending an image with no text
-      if (attachments.length === 0) return;
-    }
 
-    const trimmed = text.trim();
+    const trimmed = (text || '').trim();
     const hasImage = attachments.length > 0;
+    if (!trimmed && !hasImage) return;
+
     const imageUri = hasImage ? attachments[0].uri : null;
 
     const userMessage = {
-      id: Date.now().toString(),
+      id: `local-u-${Date.now()}`,
+      chatId: activeChatId,
       text: trimmed || (hasImage ? '📷 Sent a crop photo' : ''),
       sender: 'user',
-      image: imageUri || null,
+      image: imageUri,
+      createdAt: new Date().toISOString(),
     };
 
-    // Snapshot history BEFORE adding the user message
+    // Snapshot history (bot + user turns, but not the welcome bubble)
     const conversationSnapshot = messages
-      .filter((m) => m.id !== 'init')
+      .filter((m) => !m.isWelcome)
       .map((m) => ({ sender: m.sender, text: m.text }));
 
+    // Optimistic UI
     setMessages((prev) => [...prev, userMessage]);
     setInputText('');
     setAttachments([]);
@@ -155,6 +280,16 @@ const ChatbotScreen = ({ navigation }) => {
     setIsSending(true);
 
     try {
+      // Persist the user message first so the chat row's updated_at bumps
+      const persistedUser = await persistMessage(activeChatId, userMessage);
+
+      setMessages((prev) => prev.map((m) => (m.id === userMessage.id ? persistedUser : m)));
+      setMessagesByChat((prev) => {
+        const list = (prev[activeChatId] || []).concat(persistedUser);
+        return { ...prev, [activeChatId]: list };
+      });
+
+      // Ask the model
       let result;
       if (imageUri) {
         result = await sendChatWithImage(conversationSnapshot, trimmed, imageUri);
@@ -163,27 +298,45 @@ const ChatbotScreen = ({ navigation }) => {
       }
 
       const botMessage = {
-        id: (Date.now() + 1).toString(),
+        id: `local-b-${Date.now()}`,
+        chatId: activeChatId,
         text: result.text,
         sender: 'bot',
         isError: !result.success,
+        createdAt: new Date().toISOString(),
       };
-      setMessages((prev) => [...prev, botMessage]);
+
+      const persistedBot = await persistMessage(activeChatId, botMessage);
+
+      setMessages((prev) => [...prev, persistedBot]);
+      setMessagesByChat((prev) => {
+        const list = (prev[activeChatId] || []).concat(persistedBot);
+        return { ...prev, [activeChatId]: list };
+      });
+
+      // Title from first real user message
+      const latestForTitle = (messagesByChat[activeChatId] || []).concat([persistedUser]);
+      await maybeRetitleFromFirstUserMessage(activeChatId, latestForTitle);
+
+      // Re-sort sidebar (most recent on top)
+      await refreshChats();
+
       Haptics.notificationAsync(
         result.success
           ? Haptics.NotificationFeedbackType.Success
           : Haptics.NotificationFeedbackType.Error
       );
     } catch (err) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: (Date.now() + 1).toString(),
-          text: 'Sorry, something went wrong. Please try again.',
-          sender: 'bot',
-          isError: true,
-        },
-      ]);
+      const errorMessage = {
+        id: `local-err-${Date.now()}`,
+        chatId: activeChatId,
+        text: 'Sorry, something went wrong. Please try again.',
+        sender: 'bot',
+        isError: true,
+        createdAt: new Date().toISOString(),
+      };
+      const persistedErr = await persistMessage(activeChatId, errorMessage);
+      setMessages((prev) => [...prev, persistedErr]);
     } finally {
       setIsSending(false);
     }
@@ -194,14 +347,92 @@ const ChatbotScreen = ({ navigation }) => {
     sendMessage(topic.text);
   };
 
-  const handleNewChat = () => {
+  // ---------------------------------------------------------------------------
+  // New chat / open chat / delete chat
+  // ---------------------------------------------------------------------------
+  const handleNewChat = async () => {
+    if (isSending) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    setMessages([INITIAL_MESSAGE]);
+
+    const created = await createChat('New Chat');
+    if (!created) {
+      // Fallback: session-only chat
+      setActiveChatId(null);
+      setMessages([makeWelcomeMessage()]);
+      setShowSuggestions(true);
+      setAttachments([]);
+      Keyboard.dismiss();
+      return;
+    }
+
+    setChats((prev) => [created, ...prev]);
+    setActiveChatId(created.id);
+    setMessages([makeWelcomeMessage()]);
     setShowSuggestions(true);
     setAttachments([]);
     Keyboard.dismiss();
   };
 
+  const handleOpenChat = async (chat) => {
+    if (isSending) return;
+    Haptics.selectionAsync();
+    closeHistory();
+    if (chat.id === activeChatId) return;
+    await openChat(chat.id);
+  };
+
+  const confirmDeleteChat = (chat) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    Alert.alert(
+      'Delete chat?',
+      `"${chat.title}" will be permanently removed. This cannot be undone.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const ok = await deleteChat(chat.id);
+            if (!ok) {
+              Alert.alert('Delete failed', 'Please try again.');
+              return;
+            }
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+            const remaining = chats.filter((c) => c.id !== chat.id);
+            setChats(remaining);
+            setMessagesByChat((prev) => {
+              const copy = { ...prev };
+              delete copy[chat.id];
+              return copy;
+            });
+
+            if (chat.id === activeChatId) {
+              if (remaining.length > 0) {
+                await openChat(remaining[0].id);
+              } else {
+                const created = await createChat('New Chat');
+                if (created) {
+                  setChats([created]);
+                  setActiveChatId(created.id);
+                  setMessages([makeWelcomeMessage()]);
+                } else {
+                  setActiveChatId(null);
+                  setMessages([makeWelcomeMessage()]);
+                }
+                setShowSuggestions(true);
+                setAttachments([]);
+              }
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  // ---------------------------------------------------------------------------
+  // Attachments
+  // ---------------------------------------------------------------------------
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -236,7 +467,9 @@ const ChatbotScreen = ({ navigation }) => {
 
   const removeAttachment = (id) => setAttachments(attachments.filter((att) => att.id !== id));
 
-  // ---------- RENDERERS ----------
+  // ---------------------------------------------------------------------------
+  // Renderers
+  // ---------------------------------------------------------------------------
   const renderMessage = ({ item }) => (
     <View
       style={[
@@ -286,20 +519,41 @@ const ChatbotScreen = ({ navigation }) => {
     </TouchableOpacity>
   );
 
-  const renderHistoryItem = ({ item }) => (
-    <TouchableOpacity
-      style={[styles.historyItem, { borderBottomColor: themeColors.border }]}
-      onPress={() => closeHistory()}
-      activeOpacity={0.7}
-    >
-      <View style={styles.historyItemContent}>
-        <Text style={[styles.historyItemTitle, { color: themeColors.text }]}>{item.title}</Text>
-        <Text style={[styles.historyItemPreview, { color: themeColors.textSecondary }]} numberOfLines={1}>{item.preview}</Text>
-        <Text style={[styles.historyItemDate, { color: themeColors.textSecondary }]}>{item.date}</Text>
-      </View>
-      <Ionicons name="chevron-forward" size={20} color={themeColors.textSecondary} />
-    </TouchableOpacity>
-  );
+  const renderHistoryItem = ({ item }) => {
+    const isActive = item.id === activeChatId;
+    return (
+      <TouchableOpacity
+        style={[
+          styles.historyItem,
+          { borderBottomColor: themeColors.border },
+          isActive && { backgroundColor: themeColors.primary + '12' },
+        ]}
+        onPress={() => handleOpenChat(item)}
+        onLongPress={() => confirmDeleteChat(item)}
+        delayLongPress={350}
+        activeOpacity={0.7}
+      >
+        <View style={styles.historyItemContent}>
+          <Text
+            style={[
+              styles.historyItemTitle,
+              { color: isActive ? themeColors.primary : themeColors.text },
+            ]}
+            numberOfLines={1}
+          >
+            {item.title || 'New Chat'}
+          </Text>
+          <Text style={[styles.historyItemPreview, { color: themeColors.textSecondary }]} numberOfLines={1}>
+            {previewFromChat(item, messagesByChat)}
+          </Text>
+          <Text style={[styles.historyItemDate, { color: themeColors.textSecondary }]}>
+            {formatSidebarDate(item.updatedAt)}
+          </Text>
+        </View>
+        <Ionicons name="chevron-forward" size={20} color={themeColors.textSecondary} />
+      </TouchableOpacity>
+    );
+  };
 
   const renderAttachment = ({ item }) => (
     <View style={styles.attachmentItem}>
@@ -310,6 +564,9 @@ const ChatbotScreen = ({ navigation }) => {
     </View>
   );
 
+  // ---------------------------------------------------------------------------
+  // Screen
+  // ---------------------------------------------------------------------------
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: themeColors.background }]} edges={['top']}>
       <View style={[styles.header, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
@@ -318,40 +575,47 @@ const ChatbotScreen = ({ navigation }) => {
         </TouchableOpacity>
         <Text style={[styles.headerText, { color: themeColors.primary }]}>RootCare Companion</Text>
         <View style={styles.headerRightActions}>
-          <TouchableOpacity style={styles.menuButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openHistory(); }}>
+          <TouchableOpacity
+            style={styles.menuButton}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); openHistory(); }}
+          >
             <Ionicons name="menu-outline" size={22} color={themeColors.primary} />
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.newChatButton} onPress={handleNewChat}>
-            <Ionicons name="create-outline" size={22} color={themeColors.primary} />
           </TouchableOpacity>
         </View>
       </View>
 
       <View style={styles.chatArea}>
-        <FlatList
-          ref={flatListRef}
-          data={messages}
-          renderItem={renderMessage}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={styles.messagesList}
-          showsVerticalScrollIndicator={false}
-          onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
-          ListFooterComponent={renderTypingIndicator}
-          ListHeaderComponent={
-            showSuggestions && messages.length === 1 ? (
-              <View style={[styles.suggestionsContainer, { backgroundColor: themeColors.surface }]}>
-                <Text style={[styles.suggestionsHeader, { color: themeColors.text }]}>Try asking</Text>
-                <FlatList
-                  data={suggestedTopics}
-                  renderItem={renderSuggestedTopic}
-                  keyExtractor={(item) => item.id}
-                  scrollEnabled={false}
-                  contentContainerStyle={styles.suggestionsList}
-                />
-              </View>
-            ) : null
-          }
-        />
+        {booting ? (
+          <View style={styles.bootingWrap}>
+            <ActivityIndicator size="large" color={themeColors.primary} />
+            <Text style={[styles.bootingText, { color: themeColors.textSecondary }]}>Loading your chats…</Text>
+          </View>
+        ) : (
+          <FlatList
+            ref={flatListRef}
+            data={messages}
+            renderItem={renderMessage}
+            keyExtractor={(item) => item.id}
+            contentContainerStyle={styles.messagesList}
+            showsVerticalScrollIndicator={false}
+            onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
+            ListFooterComponent={renderTypingIndicator}
+            ListHeaderComponent={
+              showSuggestions && messages.length <= 1 ? (
+                <View style={[styles.suggestionsContainer, { backgroundColor: themeColors.surface }]}>
+                  <Text style={[styles.suggestionsHeader, { color: themeColors.text }]}>Try asking</Text>
+                  <FlatList
+                    data={suggestedTopics}
+                    renderItem={renderSuggestedTopic}
+                    keyExtractor={(item) => item.id}
+                    scrollEnabled={false}
+                    contentContainerStyle={styles.suggestionsList}
+                  />
+                </View>
+              ) : null
+            }
+          />
+        )}
 
         {attachments.length > 0 && (
           <View style={styles.attachmentsContainer}>
@@ -371,7 +635,11 @@ const ChatbotScreen = ({ navigation }) => {
           borderTopColor: themeColors.border,
           marginBottom: keyboardHeight > 0 ? keyboardHeight : 16,
         }]}>
-          <TouchableOpacity style={styles.attachButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowAttachmentMenu(!showAttachmentMenu); }} disabled={isSending}>
+          <TouchableOpacity
+            style={styles.attachButton}
+            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); setShowAttachmentMenu(!showAttachmentMenu); }}
+            disabled={isSending}
+          >
             <Ionicons name="attach-outline" size={24} color={isSending ? themeColors.border : themeColors.textSecondary} />
           </TouchableOpacity>
 
@@ -439,8 +707,13 @@ const ChatbotScreen = ({ navigation }) => {
                 <Ionicons name="close" size={24} color={themeColors.text} />
               </TouchableOpacity>
             </View>
+
+            <Text style={[styles.historyHint, { color: themeColors.textSecondary }]}>
+              Long-press a chat to delete it.
+            </Text>
+
             <FlatList
-              data={[]}
+              data={chats}
               renderItem={renderHistoryItem}
               keyExtractor={(item) => item.id}
               contentContainerStyle={styles.historyList}
@@ -449,12 +722,16 @@ const ChatbotScreen = ({ navigation }) => {
                   <Ionicons name="leaf-outline" size={48} color={themeColors.primary} />
                   <Text style={[styles.historyEmptyText, { color: themeColors.textSecondary }]}>No saved conversations yet</Text>
                   <Text style={[styles.historyEmptySubtext, { color: themeColors.textSecondary }]}>
-                    Chat history will appear here soon
+                    Start chatting and your conversations will appear here.
                   </Text>
                 </View>
               }
             />
-            <TouchableOpacity style={[styles.historyNewChat, { backgroundColor: themeColors.primary }]} onPress={() => { closeHistory(); handleNewChat(); }}>
+
+            <TouchableOpacity
+              style={[styles.historyNewChat, { backgroundColor: themeColors.primary }]}
+              onPress={() => { closeHistory(); handleNewChat(); }}
+            >
               <Ionicons name="add-circle-outline" size={24} color={themeColors['on-primary']} />
               <Text style={[styles.historyNewChatText, { color: themeColors['on-primary'] }]}>New Chat</Text>
             </TouchableOpacity>
@@ -476,6 +753,8 @@ const styles = StyleSheet.create({
   headerText: { fontSize: 18, fontWeight: '600' },
   newChatButton: { padding: 4 },
   chatArea: { flex: 1 },
+  bootingWrap: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12 },
+  bootingText: { fontSize: 14 },
   messagesList: { padding: 16, paddingBottom: 20, flexGrow: 1 },
   messageContainer: { maxWidth: '80%', padding: 12, borderRadius: 16, marginBottom: 10 },
   userMessage: { alignSelf: 'flex-end' },
@@ -509,6 +788,7 @@ const styles = StyleSheet.create({
   historySidebar: { width: SIDEBAR_WIDTH, height: '100%', borderTopRightRadius: 24, borderBottomRightRadius: 24 },
   historyHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingTop: 48, borderBottomWidth: 1 },
   historyTitle: { fontSize: 20, fontWeight: '700' },
+  historyHint: { fontSize: 11, paddingHorizontal: 20, paddingTop: 10, fontStyle: 'italic' },
   historyList: { padding: 16, paddingBottom: 80, flexGrow: 1 },
   historyItem: { flexDirection: 'row', alignItems: 'center', paddingVertical: 12, paddingHorizontal: 8, borderBottomWidth: 1 },
   historyItemContent: { flex: 1, gap: 2 },
