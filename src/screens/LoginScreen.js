@@ -162,7 +162,12 @@ const LoginScreen = ({ navigation, route }) => {
         return showModal('Google Sign In', res.message, 'error');
       }
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      navigation.replace('MainTabs');
+
+      if (res.needsProfileSetup) {
+        navigation.replace('CompleteProfile');
+      } else {
+        navigation.replace('MainTabs');
+      }
     } finally {
       setIsGoogleLoading(false);
     }

@@ -18,11 +18,13 @@ import ScannerScreen from './src/screens/ScannerScreen';
 import ResultScreen from './src/screens/ResultScreen';
 import MaintenanceScreen from './src/screens/MaintenanceScreen';
 import ReactivateAccountScreen from './src/screens/ReactivateAccountScreen';
+import CompleteProfileScreen from './src/screens/CompleteProfileScreen';   // NEW
 import { fetchMaintenance, DEFAULT_MAINTENANCE } from './src/utils/appConfig';
 
 import { loadOfflineModel } from './src/utils/offlineInference';
 import { flushQueue } from './src/utils/syncManager';
 import { fetchAccountStatus } from './src/utils/accountStatus';
+import { fetchProfileStatus } from './src/utils/profileStatus';            // NEW
 
 const Stack = createStackNavigator();
 
@@ -37,6 +39,7 @@ const AppNavigator = () => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [maintenance, setMaintenance] = useState(DEFAULT_MAINTENANCE);
   const [maintenanceChecked, setMaintenanceChecked] = useState(false);
+  const [needsProfileSetup, setNeedsProfileSetup] = useState(false);       // NEW
 
   const refreshMaintenance = React.useCallback(async () => {
     const next = await fetchMaintenance();
@@ -63,12 +66,21 @@ const AppNavigator = () => {
         if (error) {
           console.error('Session check error:', error);
           setIsAuthenticated(false);
+          setNeedsProfileSetup(false);
         } else {
           setIsAuthenticated(!!session);
+          // NEW: check profile completeness on boot
+          if (session?.user?.id) {
+            const profileStatus = await fetchProfileStatus(session.user.id);
+            setNeedsProfileSetup(profileStatus !== 'complete');
+          } else {
+            setNeedsProfileSetup(false);
+          }
         }
       } catch (error) {
         console.error('Session check error:', error);
         setIsAuthenticated(false);
+        setNeedsProfileSetup(false);
       } finally {
         setIsLoading(false);
       }
@@ -76,9 +88,17 @@ const AppNavigator = () => {
 
     checkSession();
 
-    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+    const { data: authListener } = supabase.auth.onAuthStateChange(async (event, session) => {
       console.log('Auth state changed:', event);
       setIsAuthenticated(!!session);
+
+      // NEW: recompute profile gate whenever auth state changes
+      if (session?.user?.id) {
+        const profileStatus = await fetchProfileStatus(session.user.id);
+        setNeedsProfileSetup(profileStatus !== 'complete');
+      } else {
+        setNeedsProfileSetup(false);
+      }
     });
 
     return () => {
@@ -86,15 +106,10 @@ const AppNavigator = () => {
     };
   }, []);
 
-  // Suspended while already logged in (or opening the app with a saved session):
-  // sign out and send them to Login, which shows the suspension notice.
-  // Network errors fail open so offline use keeps working; the login screen
-  // itself fails closed.
   const enforceSuspension = React.useCallback(async () => {
     try {
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user) return;
-      // The Login screen runs its own check right after sign-in.
       const route = navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : null;
       if (route === 'Login' || route === 'Onboarding') return;
 
@@ -152,9 +167,6 @@ const AppNavigator = () => {
     return () => unsub();
   }, []);
 
-  // Flush pending saves on app start / login and whenever the app returns to the foreground.
-  // (Reconnect is handled by the NetInfo listener above. flushQueue is single-flight, so
-  // overlapping triggers are safe.)
   useEffect(() => {
     if (!isAuthenticated) return;
 
@@ -206,12 +218,16 @@ const AppNavigator = () => {
     },
   };
 
+  // NEW: three-way initial route
+  const initialRoute = !isAuthenticated
+    ? 'Onboarding'
+    : needsProfileSetup
+      ? 'CompleteProfile'
+      : 'MainTabs';
+
   return (
     <NavigationContainer ref={navigationRef} theme={navigationTheme}>
-      <Stack.Navigator
-        screenOptions={{ headerShown: false }}
-        initialRouteName={isAuthenticated ? 'MainTabs' : 'Onboarding'}
-      >
+      <Stack.Navigator screenOptions={{ headerShown: false }} initialRouteName={initialRoute}>
         <Stack.Screen name="Onboarding" component={OnboardingScreen} />
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="Register" component={RegisterScreen} />
@@ -221,6 +237,11 @@ const AppNavigator = () => {
         <Stack.Screen name="Scanner" component={ScannerScreen} />
         <Stack.Screen name="Result" component={ResultScreen} />
         <Stack.Screen name="ReactivateAccount" component={ReactivateAccountScreen} />
+        <Stack.Screen
+          name="CompleteProfile"
+          component={CompleteProfileScreen}
+          options={{ gestureEnabled: false }}
+        />
       </Stack.Navigator>
     </NavigationContainer>
   );

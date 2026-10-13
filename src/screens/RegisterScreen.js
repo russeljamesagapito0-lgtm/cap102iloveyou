@@ -521,8 +521,12 @@ const RegisterScreen = ({ navigation }) => {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         return showModal('Google Sign Up', res.message, 'error');
       }
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      navigation.replace('MainTabs');
+ Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      if (res.needsProfileSetup) {
+        navigation.replace('CompleteProfile');
+      } else {
+        navigation.replace('MainTabs');
+      }
     } finally {
       setIsGoogleLoading(false);
     }
