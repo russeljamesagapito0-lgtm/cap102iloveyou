@@ -9,13 +9,12 @@ import { decode as base64Decode } from 'base64-arraybuffer';
 import { useFocusEffect } from '@react-navigation/native';
 import { supabase } from '../utils/supabaseClient';
 import { useTheme } from '../context/ThemeContext';
-import { pushNotification } from '../utils/notifications';
+import { pushNotification, invalidateNotificationPrefCache } from '../utils/notifications';
 
 const SettingsScreen = ({ navigation }) => {
   const { isDarkMode, toggleDarkMode, themeColors } = useTheme();
 
   const [pushNotifications, setPushNotifications] = useState(true);
-  const [weatherAlerts, setWeatherAlerts] = useState(true);
   const [exitConfirmVisible, setExitConfirmVisible] = useState(false);
   const [activeModal, setActiveModal] = useState(null);
 
@@ -87,7 +86,6 @@ const SettingsScreen = ({ navigation }) => {
         setSurname(data.last_name || '');
         setProfileImage(data.avatar_url || null);
         setPushNotifications(data.push_notifications ?? true);
-        setWeatherAlerts(data.weather_alerts ?? true);
       }
     } catch (err) {
       console.warn('Profile load error:', err.message);
@@ -357,11 +355,8 @@ const SettingsScreen = ({ navigation }) => {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setDeactivateModalVisible(false);
 
-      // For now: preview what a deactivated user would see,
-      // then actually sign them out.
       setDeactivatedPreview(true);
 
-      // Simulate sign-out after preview
       setTimeout(async () => {
         try { await supabase.auth.signOut(); } catch (_) {}
         navigation.reset({ index: 0, routes: [{ name: 'Onboarding' }] });
@@ -386,12 +381,10 @@ const SettingsScreen = ({ navigation }) => {
 
   const handlePushToggle = (value) => {
     setPushNotifications(value);
+    // Bust the cache in notifications.js immediately so the change takes
+    // effect for the very next notification, without waiting 60s.
+    invalidateNotificationPrefCache();
     if (!isGuest) persistToggle('push_notifications', value);
-  };
-
-  const handleWeatherToggle = (value) => {
-    setWeatherAlerts(value);
-    if (!isGuest) persistToggle('weather_alerts', value);
   };
 
   const handleExit = () => {
@@ -430,8 +423,7 @@ const SettingsScreen = ({ navigation }) => {
   };
 
   // ============================================================
-  // DEACTIVATED PREVIEW SCREEN (frontend only — will be replaced
-  // by a real screen on the Login flow once backend is wired)
+  // DEACTIVATED PREVIEW SCREEN
   // ============================================================
   if (deactivatedPreview) {
     return (
@@ -460,9 +452,6 @@ const SettingsScreen = ({ navigation }) => {
     );
   }
 
-  // ============================================================
-  // GUEST GATE MODAL
-  // ============================================================
   const renderGuestGateModal = () => (
     <Modal
       visible={guestGateVisible}
@@ -522,9 +511,6 @@ const SettingsScreen = ({ navigation }) => {
     </Modal>
   );
 
-  // ============================================================
-  // DEACTIVATE CONFIRMATION MODAL
-  // ============================================================
   const renderDeactivateModal = () => (
     <Modal
       visible={deactivateModalVisible}
@@ -920,7 +906,6 @@ const SettingsScreen = ({ navigation }) => {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={[styles.scrollContent, { paddingBottom: 40 }]}
       >
-        {/* Profile card — guest gated */}
         <TouchableOpacity
           style={[styles.profileSection, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}
           onPress={() => openModal('profile')}
@@ -1001,26 +986,13 @@ const SettingsScreen = ({ navigation }) => {
           <View style={styles.switchRow}>
             <View>
               <Text style={[styles.switchLabel, { color: themeColors.text }]}>Push Notifications</Text>
-              <Text style={[styles.switchSubtext, { color: themeColors.textSecondary }]}>Get real-time alerts</Text>
+              <Text style={[styles.switchSubtext, { color: themeColors.textSecondary }]}>
+                Get real-time alerts
+              </Text>
             </View>
             <Switch
               value={pushNotifications}
               onValueChange={handlePushToggle}
-              trackColor={{ false: '#D1D1D6', true: themeColors.primary }}
-              thumbColor={'#FFFFFF'}
-            />
-          </View>
-
-          <View style={[styles.divider, { backgroundColor: themeColors.border }]} />
-
-          <View style={styles.switchRow}>
-            <View>
-              <Text style={[styles.switchLabel, { color: themeColors.text }]}>Weather Alerts</Text>
-              <Text style={[styles.switchSubtext, { color: themeColors.textSecondary }]}>Weather warnings for your area</Text>
-            </View>
-            <Switch
-              value={weatherAlerts}
-              onValueChange={handleWeatherToggle}
               trackColor={{ false: '#D1D1D6', true: themeColors.primary }}
               thumbColor={'#FFFFFF'}
             />
@@ -1059,7 +1031,6 @@ const SettingsScreen = ({ navigation }) => {
           </TouchableOpacity>
         </View>
 
-        {/* Bottom button — Exit for guests, Sign Out for signed-in */}
         {isGuest ? (
           <TouchableOpacity
             style={[styles.exitButton, { borderColor: themeColors.border }]}
@@ -1191,7 +1162,6 @@ const styles = StyleSheet.create({
   legalText: { fontSize: 14, lineHeight: 24 },
   sectionDivider: { height: 1, marginVertical: 28, opacity: 0.6 },
 
-  // Deactivation
   deactivateBulletList: { width: '100%', gap: 10, marginTop: 4, marginBottom: 4 },
   deactivateBullet: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
   deactivateBulletText: { flex: 1, fontSize: 13, lineHeight: 18 },

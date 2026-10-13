@@ -81,7 +81,6 @@ const LoginScreen = ({ navigation, route }) => {
   };
   const closeModal = () => setModalVisible(false);
 
-  // App.js sends suspended users back here (e.g. suspended while already logged in).
   useEffect(() => {
     if (route?.params?.suspended) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
@@ -103,11 +102,6 @@ const LoginScreen = ({ navigation, route }) => {
 
     const cleanEmail = email.trim().toLowerCase();
 
-    // ============================================================
-    // DEV DEMO BYPASS — remove once backend is wired.
-    // Typing this email jumps straight to the reactivation screen
-    // so you can preview the flow without a real deactivated account.
-    // ============================================================
     if (cleanEmail === 'deactivated@rootcare.farm') {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
       navigation.replace('ReactivateAccount', {
@@ -133,8 +127,6 @@ const LoginScreen = ({ navigation, route }) => {
         return showModal('Error', message, 'error');
       }
 
-      // Suspension check: an admin sets profiles.status = 'suspended'.
-      // Sign the user straight back out so they never reach the app.
       const accountStatus = await fetchAccountStatus(data.user.id);
       if (accountStatus !== 'active') {
         await supabase.auth.signOut().catch(() => {});
@@ -144,24 +136,6 @@ const LoginScreen = ({ navigation, route }) => {
         }
         return showModal('Error', "We couldn't verify your account right now. Please try again.", 'error');
       }
-
-      // ============================================================
-      // TODO: replace with real deactivation check once backend is ready:
-      //
-      //   const { data: profile } = await supabase
-      //     .from('profiles')
-      //     .select('deactivated_at, scheduled_deletion_at')
-      //     .eq('id', data.user.id)
-      //     .maybeSingle();
-      //
-      //   if (profile?.deactivated_at) {
-      //     navigation.replace('ReactivateAccount', {
-      //       deactivatedAt: profile.deactivated_at,
-      //       scheduledDeletionAt: profile.scheduled_deletion_at,
-      //     });
-      //     return;
-      //   }
-      // ============================================================
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       showModal('Welcome Back! ', 'You have successfully logged in to RootCare.', 'success', () => navigation.replace('MainTabs'));
@@ -299,7 +273,7 @@ const LoginScreen = ({ navigation, route }) => {
             <ActivityIndicator size="small" color={themeColors.primary} />
           ) : (
             <>
-              <View style={styles.googleIcon}><Text style={styles.googleIconText}>G</Text></View>
+              <Image source={require('../assets/google-logo.png')} style={styles.googleIcon} resizeMode="contain" />
               <Text style={[styles.googleButtonText, { color: themeColors.text }]}>Continue with Google</Text>
             </>
           )}
@@ -372,8 +346,7 @@ const styles = StyleSheet.create({
   dividerLine: { flex: 1, height: 1 },
   dividerText: { fontSize: 12, fontWeight: '500', textTransform: 'uppercase', letterSpacing: 0.5, fontFamily: 'OpenSans_500Medium' },
   googleButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderRadius: 8, height: 56, gap: 12, marginBottom: 12 },
-  googleIcon: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#4285F4', alignItems: 'center', justifyContent: 'center' },
-  googleIconText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  googleIcon: { width: 22, height: 22 },
   googleButtonText: { fontSize: 14, fontWeight: '600', fontFamily: 'OpenSans_600SemiBold' },
   guestButton: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', borderRadius: 8, height: 48, gap: 8 },
   guestButtonText: { fontSize: 14, fontWeight: '600', fontFamily: 'OpenSans_600SemiBold' },
