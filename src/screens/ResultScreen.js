@@ -3,7 +3,7 @@ import { View, Text, Image, StyleSheet, TouchableOpacity, ScrollView, Modal, Pla
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { DISEASE_INFO } from '../constants/diseaseInfo';
+import { DISEASE_INFO, getDiseaseInfo } from '../constants/diseaseInfo';
 import { useTheme } from '../context/ThemeContext';
 import NetInfo from '@react-native-community/netinfo';
 import Toast from 'react-native-toast-message';
@@ -23,7 +23,9 @@ const typography = {
 const spacing = { xs: 4, sm: 12, md: 16, lg: 24, xl: 32, marginMobile: 20 };
 const rounded = { sm: 4, DEFAULT: 8, md: 12, lg: 16, xl: 24, full: 9999 };
 const HEADER_HEIGHT = 56;
-const MIN_TOUCH = 48;
+
+const GREEN_HEALTHY = '#2E9E4F';
+const AMBER_DISEASE = '#F59E0B';
 
 const findTabNavigator = (navigation) => {
   let nav = navigation.getParent();
@@ -79,14 +81,35 @@ const ResultScreen = ({ route, navigation }) => {
     }
   }, [confirmVisible, savedModalVisible]);
 
-  const diseaseData = DISEASE_INFO[diseaseKey] || { ...DISEASE_INFO.CMD, name: diseaseLabel || DISEASE_INFO.CMD.name };
+  // Resolve disease info via the alias-aware helper.
+  const diseaseData =
+    getDiseaseInfo(diseaseKey) ||
+    getDiseaseInfo(diseaseLabel) ||
+    getDiseaseInfo('HEALTHY') ||
+    DISEASE_INFO.cassava_mosaic;
+
+  const isHealthyResult =
+    diseaseData.name === 'Healthy Cassava' ||
+    diseaseKey === 'healthy' ||
+    diseaseKey === 'HEALTHY' ||
+    diseaseKey === 'Healthy' ||
+    diseaseLabel === 'Healthy';
 
   const scannedAt = scanDate ? new Date(scanDate) : new Date();
   const formattedDate = scannedAt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   const formattedTime = scannedAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
+  const headerIcon = isHealthyResult ? 'checkmark-circle' : 'alert-circle';
+  const headerColor = isHealthyResult ? GREEN_HEALTHY : AMBER_DISEASE;
+
+  const hasDescription = !!diseaseData.description;
+  const hasTreatment = !!diseaseData.treatment;
+  const hasPrevention = !!diseaseData.prevention;
+  const hasSymptoms = !!diseaseData.symptoms;
+  const hasAnySection = hasDescription || hasTreatment || hasPrevention || hasSymptoms;
+
   const saveResult = async () => {
-    if (readOnly) return true; // never re-save a historical scan
+    if (readOnly) return true;
     if (savingRef.current || isSavedRef.current) return isSavedRef.current;
     savingRef.current = true;
 
@@ -108,13 +131,24 @@ const ResultScreen = ({ route, navigation }) => {
 
       if (!scanIdRef.current) scanIdRef.current = generateScanId();
 
+      // Determine the canonical code to store.
+      const canonicalCode = (() => {
+        if (isHealthyResult) return 'healthy';
+        if (diseaseKey && DISEASE_INFO[diseaseKey]) return diseaseKey;
+        if (diseaseLabel) {
+          const hit = Object.entries(DISEASE_INFO).find(([, v]) => v.name === diseaseLabel);
+          if (hit) return hit[0];
+        }
+        return null;
+      })();
+
       await savePendingScan({
         scanId: scanIdRef.current,
         userId: session.user.id,
         preparedImageUri,
         cropType: diseaseData.crop || 'Cassava',
         capturedAt: scannedAt.toISOString(),
-        diseaseCode: DISEASE_INFO[diseaseKey] ? diseaseKey : null,
+        diseaseCode: canonicalCode,
         diseaseName: diseaseData.name,
         diseaseType,
         severity: diseaseData.severity || null,
@@ -222,35 +256,67 @@ const ResultScreen = ({ route, navigation }) => {
 
         <View style={[styles.resultCard, { backgroundColor: themeColors.card }]}>
           <View style={styles.diseaseHeader}>
-            <Ionicons name="alert-circle" size={26} color="#F59E0B" />
+            <Ionicons name={headerIcon} size={26} color={headerColor} />
             <Text style={[styles.diseaseName, { color: themeColors.text }]}>{diseaseData.name}</Text>
           </View>
           <View style={styles.scanDateRow}>
             <Ionicons name="calendar-outline" size={14} color={themeColors.textSecondary} />
-            <Text style={[styles.scanDateText, { color: themeColors.textSecondary }]}>Scanned {formattedDate} · {formattedTime}</Text>
+            <Text style={[styles.scanDateText, { color: themeColors.textSecondary }]}>
+              Scanned {formattedDate} · {formattedTime}
+            </Text>
           </View>
-          <View style={[styles.divider, { backgroundColor: themeColors.border }]} />
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Ionicons name="document-text-outline" size={18} color={themeColors.secondary} />
-              <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Description</Text>
+
+          {hasAnySection && (
+            <View style={[styles.divider, { backgroundColor: themeColors.border }]} />
+          )}
+
+          {hasDescription && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name="document-text-outline" size={18} color={themeColors.secondary} />
+                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Description</Text>
+              </View>
+              <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>
+                {diseaseData.description}
+              </Text>
             </View>
-            <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>{diseaseData.description}</Text>
-          </View>
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Ionicons name="medkit-outline" size={18} color={themeColors.secondary} />
-              <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Treatment</Text>
+          )}
+
+          {hasTreatment && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name="medkit-outline" size={18} color={themeColors.secondary} />
+                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Treatment</Text>
+              </View>
+              <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>
+                {diseaseData.treatment}
+              </Text>
             </View>
-            <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>{diseaseData.treatment}</Text>
-          </View>
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Ionicons name="shield-checkmark-outline" size={18} color={themeColors.secondary} />
-              <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Prevention</Text>
+          )}
+
+          {hasPrevention && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name="shield-checkmark-outline" size={18} color={themeColors.secondary} />
+                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Prevention</Text>
+              </View>
+              <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>
+                {diseaseData.prevention}
+              </Text>
             </View>
-            <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>{diseaseData.prevention}</Text>
-          </View>
+          )}
+
+          {hasSymptoms && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name="eye-outline" size={18} color={themeColors.secondary} />
+                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Symptoms</Text>
+              </View>
+              <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>
+                {diseaseData.symptoms}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.buttonContainer}>
@@ -266,7 +332,9 @@ const ResultScreen = ({ route, navigation }) => {
               ) : (
                 <>
                   <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={18} color={themeColors['on-primary']} />
-                  <Text style={[styles.buttonText, { color: themeColors['on-primary'] }]}>{isSaved ? 'Saved' : 'Save'}</Text>
+                  <Text style={[styles.buttonText, { color: themeColors['on-primary'] }]}>
+                    {isSaved ? 'Saved' : 'Save'}
+                  </Text>
                 </>
               )}
             </TouchableOpacity>
@@ -300,12 +368,22 @@ const ResultScreen = ({ route, navigation }) => {
             </TouchableOpacity>
             <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalScrollContent}>
               <Text style={[styles.modalTitle, { color: themeColors.text }]}>Save this result?</Text>
-              <Text style={[styles.modalBody, { color: themeColors.textSecondary }]}>You haven't saved this analysis yet. Save it to your history before you go, or discard it.</Text>
-              <TouchableOpacity style={[styles.button, { backgroundColor: themeColors.primary, marginBottom: spacing.xs, paddingVertical: spacing.sm, width: '100%', minHeight: 44 }]} onPress={handleSaveAndContinue} activeOpacity={0.85}>
+              <Text style={[styles.modalBody, { color: themeColors.textSecondary }]}>
+                You haven't saved this analysis yet. Save it to your history before you go, or discard it.
+              </Text>
+              <TouchableOpacity
+                style={[styles.button, { backgroundColor: themeColors.primary, marginBottom: spacing.xs, paddingVertical: spacing.sm, width: '100%', minHeight: 44 }]}
+                onPress={handleSaveAndContinue}
+                activeOpacity={0.85}
+              >
                 <Ionicons name="bookmark-outline" size={18} color={themeColors['on-primary']} />
                 <Text style={[styles.buttonText, { color: themeColors['on-primary'] }]}>Save & Continue</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.button, { backgroundColor: 'transparent', borderWidth: 1, borderColor: themeColors.border, marginBottom: spacing.xs, paddingVertical: spacing.sm, width: '100%', minHeight: 44 }]} onPress={handleDiscard} activeOpacity={0.85}>
+              <TouchableOpacity
+                style={[styles.button, { backgroundColor: 'transparent', borderWidth: 1, borderColor: themeColors.border, marginBottom: spacing.xs, paddingVertical: spacing.sm, width: '100%', minHeight: 44 }]}
+                onPress={handleDiscard}
+                activeOpacity={0.85}
+              >
                 <Text style={[styles.buttonText, { color: themeColors.textSecondary }]}>Discard</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.modalCancelButton} onPress={handleCancel} activeOpacity={0.7}>
@@ -323,7 +401,9 @@ const ResultScreen = ({ route, navigation }) => {
               <Ionicons name="checkmark" size={32} color={themeColors['on-primary']} />
             </View>
             <Text style={[styles.savedModalTitle, { color: themeColors.text }]}>Saved!</Text>
-            <Text style={[styles.savedModalBody, { color: themeColors.textSecondary }]}>{savedOffline ? "Saved. Will upload when you're online." : 'Scan result has been saved to history.'}</Text>
+            <Text style={[styles.savedModalBody, { color: themeColors.textSecondary }]}>
+              {savedOffline ? "Saved. Will upload when you're online." : 'Scan result has been saved to history.'}
+            </Text>
           </View>
         </View>
       </Modal>
