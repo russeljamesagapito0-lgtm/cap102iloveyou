@@ -128,18 +128,50 @@ export function bucketSeries(rows, days, dateKey = 'created_at') {
   return { points, labelEvery: Math.max(1, Math.ceil(points.length / 12)), unit: 'month' };
 }
 
+// ---------------------------------------------------------------------------
+// Disease code normalization
+//
+// Scans in the database have a mix of code formats (older models wrote 'CBB',
+// uppercase, or null). Before looking up a display name we normalize.
+// ---------------------------------------------------------------------------
+const CODE_ALIASES = {
+  cbb: 'bacterial_blight',
+  cbsd: 'cassava_brown_streak',
+  cmd: 'cassava_mosaic',
+  cgm: 'green_mite',
+  cad: 'anthracnose',
+};
+
+export const normalizeDiseaseCode = (raw) => {
+  if (raw === null || raw === undefined) return null;
+  const key = String(raw).trim().toLowerCase();
+  if (!key) return null;
+  return CODE_ALIASES[key] || key;
+};
+
 export function summarizeByDisease(scans, names = {}) {
   const map = {};
   scans.forEach((s) => {
-    const code = s.disease_code || 'unknown';
-    const m = (map[code] ||= {
-      code,
-      name: names[code] || code,
+    // Prefer disease_name (the human-readable label). Fall back to code lookup.
+    const nameFromRow =
+      s.disease_name && String(s.disease_name).trim()
+        ? String(s.disease_name).trim()
+        : null;
+    const code = normalizeDiseaseCode(s.disease_code);
+    const displayName = nameFromRow || (code ? names[code] : null);
+
+    // Skip scans that have no resolvable disease at all.
+    if (!displayName) return;
+
+    const m = (map[displayName] ||= {
+      code: code || null,
+      name: displayName,
       scans: 0,
       confSum: 0,
       corrected: 0,
       flagged: 0,
     });
+
     m.scans += 1;
     m.confSum += Number(s.confidence) || 0;
     if (s.corrected) m.corrected += 1;

@@ -224,7 +224,7 @@ export default function Reports() {
   };
 
   const REPORTS = [
-    { title: 'Scan report', desc: 'Every scan in the range with user, region, predicted vs final label and confidence.', count: `${scans.length} rows`, run: exportScans },
+    { title: 'Scan report', desc: 'Every scan in the range with user, predicted vs final label and confidence.', count: `${scans.length} rows`, run: exportScans },
     { title: 'User report', desc: 'All users with plan, status, last activity and how many scans they made in the range.', count: `${profiles.length} rows`, run: exportUsers },
     { title: 'Disease summary', desc: 'Scan volume, share, average confidence, corrections and flags per disease.', count: `${summary.length} rows`, run: exportDiseases },
     { title: 'Audit log', desc: 'Admin actions and sessions in the range.', count: 'Fetched on download', run: exportAudit, key: 'audit' },
