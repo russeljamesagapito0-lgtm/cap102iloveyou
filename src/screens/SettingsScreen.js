@@ -11,12 +11,53 @@ import { supabase } from '../utils/supabaseClient';
 import { useTheme } from '../context/ThemeContext';
 import { pushNotification, invalidateNotificationPrefCache } from '../utils/notifications';
 
+const FAQ_ITEMS = [
+  {
+    id: 'scan',
+    question: 'How do I scan a plant?',
+    answer:
+      'Open the Scanner tab, point your camera at a cassava leaf, and tap the capture button. Hold steady for a second — the app will analyze the image and show you the result with a confidence score. For best results, scan in good lighting and fill the frame with a single leaf.',
+  },
+  {
+    id: 'accuracy',
+    question: 'Why is my result inaccurate?',
+    answer:
+      'Accuracy depends on image quality. Blurry photos, poor lighting, multiple leaves in frame, or extreme angles can lower confidence. If a scan shows below 70% confidence, try again with a clearer shot. The app is trained on cassava diseases only — other crops may not classify correctly.',
+  },
+  {
+    id: 'confidence',
+    question: 'What does the confidence percentage mean?',
+    answer:
+      'Confidence is how sure the model is about its prediction. Above 85% is high, 70–85% is moderate, and below 70% is low. Low-confidence scans still appear in your history but treat them as a hint, not a diagnosis — rescan if possible.',
+  },
+  {
+    id: 'seasons',
+    question: 'How are seasons calculated?',
+    answer:
+      'Seasons follow your region\'s climate pattern, which you can change in Settings. The Philippines uses Wet Season (June–November) and Dry Season (December–May). Your analytics, comparisons, and reports all use the same season boundaries.',
+  },
+  {
+    id: 'data',
+    question: 'Where is my scan data stored?',
+    answer:
+      'Scans are stored securely in your account. Images are encrypted at rest, and only you can see them. You can delete individual scans from the History tab at any time. Deactivating your account keeps your data for 30 days so you can reactivate, after which it is permanently deleted.',
+  },
+  {
+    id: 'delete-account',
+    question: 'How do I delete my account?',
+    answer:
+      'Go to Settings → Security & Privacy → Danger Zone. Tap "Deactivate Account." Your data is preserved for 30 days in case you change your mind. Sign in again within that window to reactivate instantly. After 30 days, everything is permanently deleted.',
+  },
+];
+
 const SettingsScreen = ({ navigation }) => {
   const { isDarkMode, toggleDarkMode, themeColors } = useTheme();
 
   const [pushNotifications, setPushNotifications] = useState(true);
   const [exitConfirmVisible, setExitConfirmVisible] = useState(false);
   const [activeModal, setActiveModal] = useState(null);
+  const [expandedFaq, setExpandedFaq] = useState(null);
+  const [supportModalVisible, setSupportModalVisible] = useState(false);
 
   const [isGuest, setIsGuest] = useState(true);
   const [guestGateVisible, setGuestGateVisible] = useState(false);
@@ -113,6 +154,7 @@ const SettingsScreen = ({ navigation }) => {
       setGuestGateVisible(true);
       return;
     }
+    if (name === 'help') setExpandedFaq(null);
     setActiveModal(name);
   };
 
@@ -585,6 +627,47 @@ const SettingsScreen = ({ navigation }) => {
     </Modal>
   );
 
+  const renderSupportModal = () => (
+    <Modal
+      visible={supportModalVisible}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setSupportModalVisible(false)}
+    >
+      <View style={styles.modalOverlayConfirm}>
+        <View style={[styles.confirmModalCard, { backgroundColor: themeColors.surface }]}>
+          <View style={[styles.exitIconCircle, { backgroundColor: themeColors.primary + '20' }]}>
+            <Ionicons name="mail-outline" size={30} color={themeColors.primary} />
+          </View>
+
+          <Text style={[styles.confirmModalTitle, { color: themeColors.text }]}>
+            Contact Support
+          </Text>
+          <Text style={[styles.confirmModalBody, { color: themeColors.textSecondary }]}>
+            Send us an email at{'\n'}
+            <Text style={{ fontWeight: '700', color: themeColors.text }}>
+              support@rootcare.farm
+            </Text>
+            {'\n\n'}We usually reply within 1–2 days.
+          </Text>
+
+          <TouchableOpacity
+            style={[styles.exitConfirmButton, { backgroundColor: themeColors.primary }]}
+            onPress={() => {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+              setSupportModalVisible(false);
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={[styles.exitConfirmButtonText, { color: themeColors['on-primary'] }]}>
+              Got it
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </Modal>
+  );
+
   const renderFeedbackModal = () => (
     <Modal visible={feedbackVisible} transparent animationType="fade" onRequestClose={() => setFeedbackVisible(false)}>
       <View style={styles.modalOverlayConfirm}>
@@ -813,34 +896,100 @@ const SettingsScreen = ({ navigation }) => {
               {activeModal === 'help' && (
                 <View>
                   <Text style={[styles.modalDescription, { color: themeColors.textSecondary }]}>
-                    We are here to assist you! Browse our frequently asked questions or contact support.
+                    Browse the answers below, or reach out to our team directly.
                   </Text>
 
-                  <View style={[styles.settingRow, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
-                    <View style={styles.settingRowLeft}>
-                      <Ionicons name="help-circle-outline" size={22} color={themeColors.textSecondary} />
-                      <Text style={[styles.settingRowLabel, { color: themeColors.text }]}>How do I scan a plant?</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color={themeColors.textSecondary} />
+                  <View style={styles.faqList}>
+                    {FAQ_ITEMS.map((item, i) => {
+                      const isOpen = expandedFaq === item.id;
+                      const isLast = i === FAQ_ITEMS.length - 1;
+                      return (
+                        <View
+                          key={item.id}
+                          style={[
+                            styles.faqItem,
+                            {
+                              backgroundColor: themeColors.surface,
+                              borderColor: themeColors.border,
+                              marginBottom: isLast ? 0 : 10,
+                            },
+                          ]}
+                        >
+                          <TouchableOpacity
+                            onPress={() => {
+                              Haptics.selectionAsync();
+                              setExpandedFaq(isOpen ? null : item.id);
+                            }}
+                            activeOpacity={0.7}
+                            style={styles.faqHeader}
+                            accessibilityRole="button"
+                            accessibilityState={{ expanded: isOpen }}
+                          >
+                            <View style={styles.settingRowLeft}>
+                              <Ionicons
+                                name={isOpen ? 'help-circle' : 'help-circle-outline'}
+                                size={22}
+                                color={isOpen ? themeColors.primary : themeColors.textSecondary}
+                              />
+                              <Text
+                                style={[styles.settingRowLabel, { color: themeColors.text, flex: 1 }]}
+                              >
+                                {item.question}
+                              </Text>
+                            </View>
+                            <Ionicons
+                              name={isOpen ? 'chevron-up' : 'chevron-down'}
+                              size={18}
+                              color={themeColors.textSecondary}
+                            />
+                          </TouchableOpacity>
+
+                          {isOpen && (
+                            <View
+                              style={[
+                                styles.faqAnswer,
+                                { borderTopColor: themeColors.border },
+                              ]}
+                            >
+                              <Text
+                                style={[styles.faqAnswerText, { color: themeColors.textSecondary }]}
+                              >
+                                {item.answer}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                      );
+                    })}
                   </View>
 
-                  <View style={[styles.settingRow, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
-                    <View style={styles.settingRowLeft}>
-                      <Ionicons name="help-circle-outline" size={22} color={themeColors.textSecondary} />
-                      <Text style={[styles.settingRowLabel, { color: themeColors.text }]}>Why is my result inaccurate?</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={18} color={themeColors.textSecondary} />
-                  </View>
-
-                  <TouchableOpacity
-                    style={[styles.modalSaveButton, { backgroundColor: themeColors.primary }]}
-                    onPress={() => {
-                      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-                      Alert.alert('Contact Support', 'Email us at support@rootcare.farm');
-                    }}
+                  <View
+                    style={[
+                      styles.supportCard,
+                      { backgroundColor: themeColors.primary + '10', borderColor: themeColors.primary + '30' },
+                    ]}
                   >
-                    <Text style={styles.modalSaveButtonText}>Contact Support</Text>
-                  </TouchableOpacity>
+                    <Ionicons name="chatbubbles-outline" size={24} color={themeColors.primary} />
+                    <Text style={[styles.supportTitle, { color: themeColors.text }]}>
+                      Still need help?
+                    </Text>
+                    <Text style={[styles.supportBody, { color: themeColors.textSecondary }]}>
+                      Our team usually replies within 1–2 days.
+                    </Text>
+                    <TouchableOpacity
+                      style={[styles.supportButton, { backgroundColor: themeColors.primary }]}
+                      onPress={() => {
+                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                        setSupportModalVisible(true);
+                      }}
+                      activeOpacity={0.85}
+                    >
+                      <Ionicons name="mail-outline" size={18} color={themeColors['on-primary']} style={{ marginRight: 6 }} />
+                      <Text style={[styles.supportButtonText, { color: themeColors['on-primary'] }]}>
+                        Email Support
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               )}
 
@@ -1098,6 +1247,7 @@ const SettingsScreen = ({ navigation }) => {
       {renderFeedbackModal()}
       {renderGuestGateModal()}
       {renderDeactivateModal()}
+      {renderSupportModal()}
     </SafeAreaView>
   );
 };
@@ -1161,6 +1311,64 @@ const styles = StyleSheet.create({
   settingRowLabel: { fontSize: 14, fontWeight: '500' },
   legalText: { fontSize: 14, lineHeight: 24 },
   sectionDivider: { height: 1, marginVertical: 28, opacity: 0.6 },
+
+  faqList: {
+    marginTop: 4,
+    marginBottom: 20,
+  },
+  faqItem: {
+    borderWidth: 1,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  faqHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    gap: 12,
+  },
+  faqAnswer: {
+    paddingHorizontal: 14,
+    paddingBottom: 14,
+    paddingTop: 12,
+    borderTopWidth: 1,
+  },
+  faqAnswerText: {
+    fontSize: 13.5,
+    lineHeight: 20,
+  },
+  supportCard: {
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 18,
+    alignItems: 'center',
+    gap: 6,
+  },
+  supportTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    marginTop: 4,
+  },
+  supportBody: {
+    fontSize: 12.5,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  supportButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 999,
+    minHeight: 44,
+  },
+  supportButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
 
   deactivateBulletList: { width: '100%', gap: 10, marginTop: 4, marginBottom: 4 },
   deactivateBullet: { flexDirection: 'row', alignItems: 'flex-start', gap: 10 },
