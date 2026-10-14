@@ -18,10 +18,37 @@ const OnboardingScreen = ({ navigation }) => {
   const splashFade = useRef(new Animated.Value(1)).current;
 
   const slides = [
-    { id: '1', subtitle: 'Rooted in Nature, Powered by Technology', image: require('../assets/logo.png'), description: 'Your AI-powered cassava disease detection assistant', icon: 'leaf-outline' },
-    { id: '2', title: 'Protect Your Harvest', subtitle: 'Instantly detect cassava diseases with our AI-powered scanner.', image: require('../assets/SecondSlide.png'), description: 'Get expert treatment advice in seconds', icon: 'scan-outline' },
-    { id: '3', title: 'Smart Farming', subtitle: 'Monitor crop health and get real-time insights.', image: require('../assets/ThirdSlide.png'), description: 'Make informed decisions with data-driven analysis', icon: 'stats-chart-outline' },
-    { id: '4', title: 'Grow Your Income', subtitle: 'Connect with farmers, negotiate fair prices, and earn more.', image: require('../assets/LastSlide.png'), description: 'Buy and sell root crops directly through the marketplace', icon: 'storefront-outline' },
+    {
+      id: '1',
+      subtitle: 'Rooted in Nature, Powered by Technology',
+      image: require('../assets/logo.png'),
+      description: 'Your AI-powered cassava disease detection assistant',
+      icon: 'leaf-outline',
+    },
+    {
+      id: '2',
+      title: 'Protect Your Harvest',
+      subtitle: 'Instantly detect cassava diseases with our AI-powered scanner.',
+      image: require('../assets/SecondSlide.png'),
+      description: 'Get expert treatment advice in seconds',
+      icon: 'scan-outline',
+    },
+    {
+      id: '3',
+      title: 'Smart Farming',
+      subtitle: 'Monitor crop health and get real-time insights.',
+      image: require('../assets/ThirdSlide.png'),
+      description: 'Make informed decisions with data-driven analysis',
+      icon: 'stats-chart-outline',
+    },
+    {
+      id: '4',
+      title: 'Ask RootCare Companion',
+      subtitle: 'Get instant answers about cassava care from your AI farming assistant.',
+      image: require('../assets/ChatbotSlide.png'),
+      description: 'From disease treatment to planting advice — ask anytime',
+      icon: 'chatbubble-ellipses-outline',
+    },
   ];
 
   useEffect(() => {
