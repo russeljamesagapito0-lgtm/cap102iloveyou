@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import PageHeader from '../components/PageHeader';
 import Audit from './Audit';
 import Backup from './Backup';
 import Badge from '../components/Badge';
@@ -14,7 +15,6 @@ import {
   auditSetting,
 } from '../lib/appSettings';
 
-// <input type="datetime-local"> wants "YYYY-MM-DDTHH:mm" in local time.
 const toLocalInput = (iso) => {
   if (!iso) return '';
   const d = new Date(iso);
@@ -206,22 +206,29 @@ export default function Maintenance() {
   const tab = ['audit', 'backup'].includes(params.get('tab')) ? params.get('tab') : 'mode';
 
   return (
-    <div className="stack-lg">
-      <div className="filter-bar">
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            className={'filter-btn' + (tab === t.key ? ' active' : '')}
-            onClick={() => setParams(t.key === 'mode' ? {} : { tab: t.key })}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+    <>
+      <PageHeader
+        title="Maintenance"
+        subtitle="App-wide controls, audit log, and backups"
+      />
 
-      {tab === 'mode' && <MaintenancePanel />}
-      {tab === 'audit' && <Audit />}
-      {tab === 'backup' && <Backup />}
-    </div>
+      <div className="stack-lg">
+        <div className="filter-bar">
+          {TABS.map((t) => (
+            <button
+              key={t.key}
+              className={'filter-btn' + (tab === t.key ? ' active' : '')}
+              onClick={() => setParams(t.key === 'mode' ? {} : { tab: t.key })}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'mode' && <MaintenancePanel />}
+        {tab === 'audit' && <Audit />}
+        {tab === 'backup' && <Backup />}
+      </div>
+    </>
   );
 }

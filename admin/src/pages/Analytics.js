@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import PageHeader from '../components/PageHeader';
 import StatCard from '../components/StatCard';
 import LineChart from '../components/LineChart';
 import BarList from '../components/BarList';
@@ -98,95 +99,106 @@ export default function Analytics() {
     : '0';
 
   return (
-    <div className="stack-lg">
-      <div className="flex-between">
-        <p className="page-subtitle">
-          {loading ? 'Loading…' : `${data.total} scans · ${range.days ? `last ${range.label}` : 'all time'}`}
-        </p>
-        <div className="filter-bar">
-          {RANGES.map((r) => (
-            <button
-              key={r.key}
-              className={'filter-btn' + (rangeKey === r.key ? ' active' : '')}
-              onClick={() => setRangeKey(r.key)}
-            >
-              {r.label}
-            </button>
-          ))}
-        </div>
-      </div>
+    <>
+      <PageHeader
+        title="Analytics"
+        subtitle={
+          loading
+            ? 'Loading…'
+            : `${data.total} scans · ${range.days ? `last ${range.label}` : 'all time'}`
+        }
+      />
 
-      <div className="grid-3">
-        <StatCard label="Total Scans" value={data.total} icon="scans" footer={`${data.lowConf} below 70% confidence`} />
-        <StatCard label="Active Users" value={data.activeUsers} icon="users" footer={`${data.newUsersCount} new sign-ups`} />
-        <StatCard label="Avg Confidence" value={avgConfidence(scans)} icon="check" footer="Across all scans in range" />
-      </div>
-
-      <div className="chart-card">
-        <div className="chart-head">
-          <div>
-            <div className="chart-title">Scans over time</div>
-            <div className="chart-sub">Per {data.scanSeries.unit}</div>
+      <div className="stack-lg">
+        <div className="flex-between">
+          <p className="page-subtitle">
+            {loading ? 'Loading…' : `${data.total} scans · ${range.days ? `last ${range.label}` : 'all time'}`}
+          </p>
+          <div className="filter-bar">
+            {RANGES.map((r) => (
+              <button
+                key={r.key}
+                className={'filter-btn' + (rangeKey === r.key ? ' active' : '')}
+                onClick={() => setRangeKey(r.key)}
+              >
+                {r.label}
+              </button>
+            ))}
           </div>
         </div>
-        <div className="kpi-strip">
-          <div className="kpi-cell">
-            <span className="kpi-label">Total</span>
-            <span className="kpi-value accent">{data.total}</span>
-          </div>
-          <div className="kpi-cell">
-            <span className="kpi-label">Avg per {data.scanSeries.unit}</span>
-            <span className="kpi-value">{avgPerBucket}</span>
-          </div>
-          <div className="kpi-cell">
-            <span className="kpi-label">Peak</span>
-            <span className="kpi-value">
-              {data.peak && data.peak.count > 0 ? `${data.peak.day} (${data.peak.count})` : '—'}
-            </span>
-          </div>
-        </div>
-        {data.total === 0 ? (
-          <div className="chart-empty">No scans recorded in this period.</div>
-        ) : (
-          <LineChart data={data.scanSeries.points} labelEvery={data.scanSeries.labelEvery} unit="scan" />
-        )}
-      </div>
 
-      <div className="grid-2">
-        <div className="chart-card">
-          <div>
-            <div className="chart-title">Disease distribution</div>
-            <div className="chart-sub">Final label of each scan</div>
-          </div>
-          <BarList items={data.diseaseItems} total={data.total} />
+        <div className="grid-3">
+          <StatCard label="Total Scans" value={data.total} icon="scans" footer={`${data.lowConf} below 70% confidence`} />
+          <StatCard label="Active Users" value={data.activeUsers} icon="users" footer={`${data.newUsersCount} new sign-ups`} />
+          <StatCard label="Avg Confidence" value={avgConfidence(scans)} icon="check" footer="Across all scans in range" />
         </div>
 
         <div className="chart-card">
-          <div>
-            <div className="chart-title">User growth</div>
-            <div className="chart-sub">New sign-ups per {data.userSeries.unit}</div>
+          <div className="chart-head">
+            <div>
+              <div className="chart-title">Scans over time</div>
+              <div className="chart-sub">Per {data.scanSeries.unit}</div>
+            </div>
           </div>
-          {data.newUsersCount === 0 ? (
-            <div className="chart-empty">No new users in this period.</div>
+          <div className="kpi-strip">
+            <div className="kpi-cell">
+              <span className="kpi-label">Total</span>
+              <span className="kpi-value accent">{data.total}</span>
+            </div>
+            <div className="kpi-cell">
+              <span className="kpi-label">Avg per {data.scanSeries.unit}</span>
+              <span className="kpi-value">{avgPerBucket}</span>
+            </div>
+            <div className="kpi-cell">
+              <span className="kpi-label">Peak</span>
+              <span className="kpi-value">
+                {data.peak && data.peak.count > 0 ? `${data.peak.day} (${data.peak.count})` : '—'}
+              </span>
+            </div>
+          </div>
+          {data.total === 0 ? (
+            <div className="chart-empty">No scans recorded in this period.</div>
           ) : (
-            <LineChart data={data.userSeries.points} labelEvery={data.userSeries.labelEvery} unit="user" />
+            <LineChart data={data.scanSeries.points} labelEvery={data.scanSeries.labelEvery} unit="scan" />
+          )}
+        </div>
+
+        <div className="grid-2">
+          <div className="chart-card">
+            <div>
+              <div className="chart-title">Disease distribution</div>
+              <div className="chart-sub">Final label of each scan</div>
+            </div>
+            <BarList items={data.diseaseItems} total={data.total} />
+          </div>
+
+          <div className="chart-card">
+            <div>
+              <div className="chart-title">User growth</div>
+              <div className="chart-sub">New sign-ups per {data.userSeries.unit}</div>
+            </div>
+            {data.newUsersCount === 0 ? (
+              <div className="chart-empty">No new users in this period.</div>
+            ) : (
+              <LineChart data={data.userSeries.points} labelEvery={data.userSeries.labelEvery} unit="user" />
+            )}
+          </div>
+        </div>
+
+        <div className="chart-card">
+          <div className="chart-head">
+            <div>
+              <div className="chart-title">Confidence distribution</div>
+              <div className="chart-sub">How confident the model was across scans in range</div>
+            </div>
+          </div>
+          {data.total === 0 ? (
+            <div className="chart-empty">No scans recorded in this period.</div>
+          ) : (
+            <BarList items={data.confItems} total={data.total} />
           )}
         </div>
       </div>
-
-      <div className="chart-card">
-        <div className="chart-head">
-          <div>
-            <div className="chart-title">Confidence distribution</div>
-            <div className="chart-sub">How confident the model was across scans in range</div>
-          </div>
-        </div>
-        {data.total === 0 ? (
-          <div className="chart-empty">No scans recorded in this period.</div>
-        ) : (
-          <BarList items={data.confItems} total={data.total} />
-        )}
-      </div>
-    </div>
+    </>
   );
 }

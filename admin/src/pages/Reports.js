@@ -1,5 +1,6 @@
 // src/pages/Reports.js
 import { useEffect, useMemo, useState } from 'react';
+import PageHeader from '../components/PageHeader';
 import Icon from '../components/Icon';
 import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
@@ -236,103 +237,110 @@ export default function Reports() {
   ];
 
   return (
-    <div className="stack-lg">
-      <div className="chart-card no-print">
-        <div className="chart-head">
-          <div>
-            <div className="chart-title">Date range</div>
-            <div className="chart-sub">Applies to every report below</div>
-          </div>
-          <div className="filter-bar">
-            {PRESETS.map((p) => (
-              <button key={p.key} className="filter-btn" onClick={() => applyPreset(p)}>
-                {p.label}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="flex-center" style={{ gap: 12, flexWrap: 'wrap' }}>
-          <input className="input" type="date" style={{ width: 170 }} value={from} max={to || today} onChange={(e) => setFrom(e.target.value)} />
-          <span className="text-muted">to</span>
-          <input className="input" type="date" style={{ width: 170 }} value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} />
-        </div>
-      </div>
+    <>
+      <PageHeader
+        title="Reports"
+        subtitle="Generate and export CSV and PDF reports"
+      />
 
-      <div className="grid-2 no-print">
-        {REPORTS.map((r) => (
-          <div className="chart-card" key={r.title}>
+      <div className="stack-lg">
+        <div className="chart-card no-print">
+          <div className="chart-head">
             <div>
-              <div className="chart-title">{r.title}</div>
-              <div className="chart-sub">{r.desc}</div>
+              <div className="chart-title">Date range</div>
+              <div className="chart-sub">Applies to every report below</div>
             </div>
-            <div className="flex-between">
-              <span className="text-muted" style={{ fontSize: 12 }}>{loading ? 'Loading…' : r.count}</span>
-              <button className="btn btn-outline btn-sm" onClick={r.run} disabled={loading || busy === r.key}>
-                <Icon name="download" size={14} /> {busy === r.key ? 'Preparing…' : 'Download CSV'}
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      <div className="chart-card">
-        <div className="chart-head">
-          <div>
-            <div className="chart-title">Summary report</div>
-            <div className="chart-sub">RootCare · {rangeLabel} · generated {fmtDate(new Date().toISOString())}</div>
-          </div>
-          <button className="btn btn-primary btn-sm no-print" onClick={handleDownloadPdf} disabled={loading || pdfBusy}>
-            <Icon name="download" size={14} /> {pdfBusy ? 'Generating…' : 'Download PDF'}
-          </button>
-        </div>
-
-        <div className="kpi-strip">
-          <div className="kpi-cell">
-            <span className="kpi-label">Total scans</span>
-            <span className="kpi-value accent">{scans.length}</span>
-          </div>
-          <div className="kpi-cell">
-            <span className="kpi-label">Active users</span>
-            <span className="kpi-value">{activeUsers}</span>
-          </div>
-          <div className="kpi-cell">
-            <span className="kpi-label">Avg confidence</span>
-            <span className="kpi-value">{avgConfidence(scans)}</span>
-          </div>
-        </div>
-
-        <div className="table-wrapper">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Disease</th>
-                <th className="text-right">Scans</th>
-                <th className="text-right">Share</th>
-                <th className="text-right">Avg confidence</th>
-                <th className="text-right">Corrected</th>
-                <th className="text-right">Flagged</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summary.map((d) => (
-                <tr key={d.code}>
-                  <td className="cell-strong">{d.name}</td>
-                  <td className="text-right">{d.scans}</td>
-                  <td className="text-right cell-muted">{pct(d.scans, scans.length, 1)}</td>
-                  <td className="text-right cell-muted">{pct(d.confSum, d.scans, 1)}</td>
-                  <td className="text-right">{d.corrected}</td>
-                  <td className="text-right">{d.flagged}</td>
-                </tr>
+            <div className="filter-bar">
+              {PRESETS.map((p) => (
+                <button key={p.key} className="filter-btn" onClick={() => applyPreset(p)}>
+                  {p.label}
+                </button>
               ))}
-              {!loading && summary.length === 0 && (
+            </div>
+          </div>
+          <div className="flex-center" style={{ gap: 12, flexWrap: 'wrap' }}>
+            <input className="input" type="date" style={{ width: 170 }} value={from} max={to || today} onChange={(e) => setFrom(e.target.value)} />
+            <span className="text-muted">to</span>
+            <input className="input" type="date" style={{ width: 170 }} value={to} min={from} max={today} onChange={(e) => setTo(e.target.value)} />
+          </div>
+        </div>
+
+        <div className="grid-2 no-print">
+          {REPORTS.map((r) => (
+            <div className="chart-card" key={r.title}>
+              <div>
+                <div className="chart-title">{r.title}</div>
+                <div className="chart-sub">{r.desc}</div>
+              </div>
+              <div className="flex-between">
+                <span className="text-muted" style={{ fontSize: 12 }}>{loading ? 'Loading…' : r.count}</span>
+                <button className="btn btn-outline btn-sm" onClick={r.run} disabled={loading || busy === r.key}>
+                  <Icon name="download" size={14} /> {busy === r.key ? 'Preparing…' : 'Download CSV'}
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="chart-card">
+          <div className="chart-head">
+            <div>
+              <div className="chart-title">Summary report</div>
+              <div className="chart-sub">RootCare · {rangeLabel} · generated {fmtDate(new Date().toISOString())}</div>
+            </div>
+            <button className="btn btn-primary btn-sm no-print" onClick={handleDownloadPdf} disabled={loading || pdfBusy}>
+              <Icon name="download" size={14} /> {pdfBusy ? 'Generating…' : 'Download PDF'}
+            </button>
+          </div>
+
+          <div className="kpi-strip">
+            <div className="kpi-cell">
+              <span className="kpi-label">Total scans</span>
+              <span className="kpi-value accent">{scans.length}</span>
+            </div>
+            <div className="kpi-cell">
+              <span className="kpi-label">Active users</span>
+              <span className="kpi-value">{activeUsers}</span>
+            </div>
+            <div className="kpi-cell">
+              <span className="kpi-label">Avg confidence</span>
+              <span className="kpi-value">{avgConfidence(scans)}</span>
+            </div>
+          </div>
+
+          <div className="table-wrapper">
+            <table className="table">
+              <thead>
                 <tr>
-                  <td colSpan="6" className="text-center text-muted">No scans in this range.</td>
+                  <th>Disease</th>
+                  <th className="text-right">Scans</th>
+                  <th className="text-right">Share</th>
+                  <th className="text-right">Avg confidence</th>
+                  <th className="text-right">Corrected</th>
+                  <th className="text-right">Flagged</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {summary.map((d) => (
+                  <tr key={d.code}>
+                    <td className="cell-strong">{d.name}</td>
+                    <td className="text-right">{d.scans}</td>
+                    <td className="text-right cell-muted">{pct(d.scans, scans.length, 1)}</td>
+                    <td className="text-right cell-muted">{pct(d.confSum, d.scans, 1)}</td>
+                    <td className="text-right">{d.corrected}</td>
+                    <td className="text-right">{d.flagged}</td>
+                  </tr>
+                ))}
+                {!loading && summary.length === 0 && (
+                  <tr>
+                    <td colSpan="6" className="text-center text-muted">No scans in this range.</td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
       </div>
-    </div>
+    </>
   );
 }

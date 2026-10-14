@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import PageHeader from '../components/PageHeader';
 import StatCard from '../components/StatCard';
 import LineChart from '../components/LineChart';
 import { supabase } from '../lib/supabase';
@@ -26,19 +27,35 @@ export default function Dashboard() {
     setLastUpdatedAt(new Date());
   }, []);
 
-  // Initial load
   useEffect(() => {
     fetchStats();
   }, [fetchStats]);
 
-  // Silent refresh — updates the timestamp above, no spinner
   useAutoRefresh(fetchStats, { intervalMs: 15000 });
 
-  // Re-render every 30s so the "X ago" label keeps ticking
-  const now = useNow(30000);
+  useNow(30000);
 
-  if (err) return <p className="text-muted">Error: {err}</p>;
-  if (!stats) return <p className="text-muted">Loading...</p>;
+  if (err) {
+    return (
+      <>
+        <PageHeader title="Dashboard" />
+        <div className="stack-lg">
+          <p className="text-muted">Error: {err}</p>
+        </div>
+      </>
+    );
+  }
+
+  if (!stats) {
+    return (
+      <>
+        <PageHeader title="Dashboard" />
+        <div className="stack-lg">
+          <p className="text-muted">Loading...</p>
+        </div>
+      </>
+    );
+  }
 
   const scansPerDay = stats.scansPerDay || [];
   const totalWeekScans = sumCounts(scansPerDay);
@@ -53,66 +70,64 @@ export default function Dashboard() {
     : '';
 
   return (
-    <div className="stack-lg">
-      <div className="page-header">
-        <div>
-          <h1 className="page-title">Dashboard</h1>
-          {updatedLabel && (
-            <p className="page-meta">Updated {updatedLabel}</p>
+    <>
+      <PageHeader
+        title="Dashboard"
+        subtitle={updatedLabel ? `Updated ${updatedLabel}` : ''}
+      />
+
+      <div className="stack-lg">
+        <div className="grid-2">
+          <StatCard
+            label="Total Scans"
+            value={stats.totalScans}
+            trend={isLive ? `+${scansToday} today` : 'No new scans'}
+            trendTone={isLive ? 'up' : 'neutral'}
+            icon="scans"
+            footer={`${stats.totalScans} scans recorded`}
+          />
+          <StatCard
+            label="Scans Today"
+            value={scansToday}
+            trend={isLive ? 'Live' : 'Quiet'}
+            trendTone={isLive ? 'up' : 'neutral'}
+            icon="calendar"
+            footer="New scans since midnight"
+          />
+        </div>
+
+        <div className="chart-card">
+          <div className="chart-head">
+            <div>
+              <div className="chart-title">Scans over time</div>
+              <div className="chart-sub">Last 7 days</div>
+            </div>
+          </div>
+
+          <div className="kpi-strip">
+            <div className="kpi-cell">
+              <span className="kpi-label">Daily Avg</span>
+              <span className="kpi-value accent">{dailyAvg}</span>
+            </div>
+            <div className="kpi-cell">
+              <span className="kpi-label">Peak Day</span>
+              <span className="kpi-value">
+                {peakDay ? `${peakDay.day} (${peakDay.count})` : '—'}
+              </span>
+            </div>
+            <div className="kpi-cell">
+              <span className="kpi-label">Week Total</span>
+              <span className="kpi-value accent">{totalWeekScans}</span>
+            </div>
+          </div>
+
+          {totalWeekScans === 0 ? (
+            <div className="chart-empty">No scans recorded in this period.</div>
+          ) : (
+            <LineChart data={scansPerDay} />
           )}
         </div>
       </div>
-
-      <div className="grid-2">
-        <StatCard
-          label="Total Scans"
-          value={stats.totalScans}
-          trend={isLive ? `+${scansToday} today` : 'No new scans'}
-          trendTone={isLive ? 'up' : 'neutral'}
-          icon="scans"
-          footer={`${stats.totalScans} scans recorded`}
-        />
-        <StatCard
-          label="Scans Today"
-          value={scansToday}
-          trend={isLive ? 'Live' : 'Quiet'}
-          trendTone={isLive ? 'up' : 'neutral'}
-          icon="calendar"
-          footer="New scans since midnight"
-        />
-      </div>
-
-      <div className="chart-card">
-        <div className="chart-head">
-          <div>
-            <div className="chart-title">Scans over time</div>
-            <div className="chart-sub">Last 7 days</div>
-          </div>
-        </div>
-
-        <div className="kpi-strip">
-          <div className="kpi-cell">
-            <span className="kpi-label">Daily Avg</span>
-            <span className="kpi-value accent">{dailyAvg}</span>
-          </div>
-          <div className="kpi-cell">
-            <span className="kpi-label">Peak Day</span>
-            <span className="kpi-value">
-              {peakDay ? `${peakDay.day} (${peakDay.count})` : '—'}
-            </span>
-          </div>
-          <div className="kpi-cell">
-            <span className="kpi-label">Week Total</span>
-            <span className="kpi-value accent">{totalWeekScans}</span>
-          </div>
-        </div>
-
-        {totalWeekScans === 0 ? (
-          <div className="chart-empty">No scans recorded in this period.</div>
-        ) : (
-          <LineChart data={scansPerDay} />
-        )}
-      </div>
-    </div>
+    </>
   );
 }

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import PageHeader from '../components/PageHeader';
 import Modal from '../components/Modal';
 import Pager from '../components/Pager';
 import usePagination from '../lib/usePagination';
@@ -183,7 +184,6 @@ export default function Users() {
   const confirm = useConfirm();
   const toast = useToast();
 
-  // Silent auto-refresh: user list (with scan counts) + the open user's scans
   const selectedIdRef = useRef(null);
   useEffect(() => { selectedIdRef.current = selected?.id || null; }, [selected]);
   const diseaseNamesRef = useRef({});
@@ -513,249 +513,256 @@ export default function Users() {
       : 'No suspended accounts.';
 
   return (
-    <div className="stack-lg">
-      <div className="flex-between">
-        <div className="filter-bar">
-          <button
-            className={'filter-btn' + (view === 'active' ? ' active' : '')}
-            onClick={() => setView('active')}
-          >
-            Active ({activeCount})
-          </button>
-          <button
-            className={'filter-btn' + (view === 'suspended' ? ' active' : '')}
-            onClick={() => setView('suspended')}
-          >
-            Suspended ({suspendedCount})
-          </button>
-        </div>
+    <>
+      <PageHeader
+        title="Users"
+        subtitle={`${activeCount} active · ${suspendedCount} suspended`}
+      />
 
-        <div className="flex-center" style={{ gap: 10 }}>
-          <input
-            className="input"
-            style={{ width: 280 }}
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by name or email..."
-          />
-          <button className="btn btn-outline btn-sm" onClick={exportUsers}>
-            Export {view}
-          </button>
-          <button
-            className="btn btn-outline btn-sm"
-            onClick={backupAll}
-            disabled={busy}
-          >
-            {busy ? 'Preparing…' : 'Backup all'}
-          </button>
-        </div>
-      </div>
-
-      <div className="table-wrapper">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Name</th>
-              <th>Email</th>
-              <th className="text-right">Scans</th>
-              <th>Last active</th>
-              <th>Status</th>
-              <th className="text-right">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {userPager.pageItems.map((u) => (
-              <tr key={u.id}>
-                <td className="cell-strong">{u.name}</td>
-                <td className="cell-muted">{u.email}</td>
-                <td className="text-right">{u.scans}</td>
-                <td className="cell-muted">{u.lastActive}</td>
-                <td className={statusClass(u.status)}>{u.status}</td>
-                <td className="text-right">
-                  <button className="link-btn" onClick={() => openUser(u)}>
-                    Manage
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {visibleUsers.length === 0 && (
-              <tr>
-                <td colSpan="6" className="text-center text-muted">
-                  {emptyMessage}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-
-      <Pager pager={userPager} />
-
-      <Modal
-        open={!!selected}
-        onClose={closeUser}
-        title={selected ? `Manage ${selected.name}` : ''}
-        footer={
-          <>
+      <div className="stack-lg">
+        <div className="flex-between">
+          <div className="filter-bar">
             <button
-              className="btn btn-outline"
-              onClick={backupUser}
+              className={'filter-btn' + (view === 'active' ? ' active' : '')}
+              onClick={() => setView('active')}
+            >
+              Active ({activeCount})
+            </button>
+            <button
+              className={'filter-btn' + (view === 'suspended' ? ' active' : '')}
+              onClick={() => setView('suspended')}
+            >
+              Suspended ({suspendedCount})
+            </button>
+          </div>
+
+          <div className="flex-center" style={{ gap: 10 }}>
+            <input
+              className="input"
+              style={{ width: 280 }}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by name or email..."
+            />
+            <button className="btn btn-outline btn-sm" onClick={exportUsers}>
+              Export {view}
+            </button>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={backupAll}
               disabled={busy}
             >
-              {busy ? 'Preparing…' : 'Backup user'}
+              {busy ? 'Preparing…' : 'Backup all'}
             </button>
-            <button className="btn btn-outline" onClick={closeUser}>
-              Close
-            </button>
-            <button
-              className={'btn ' + (selectedIsActive ? 'btn-danger' : 'btn-primary')}
-              onClick={toggleStatus}
-            >
-              {selectedIsActive ? 'Suspend user' : 'Reactivate user'}
-            </button>
-          </>
-        }
-      >
-        {selected && (
-          <div className="user-manage-body">
-            <div>
-              <div className="info-row">
-                <span className="info-row-label">Email</span>
-                <span className="info-row-value">{selected.email}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-row-label">Total scans</span>
-                <span className="info-row-value">{selected.scans}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-row-label">Last active</span>
-                <span className="info-row-value">{selected.lastActive}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-row-label">Status</span>
-                <span className={statusClass(selected.status)}>{selected.status}</span>
-              </div>
-            </div>
+          </div>
+        </div>
 
-            <div className="scan-section">
-              <div className="scan-section-header">
-                <span className="scan-section-title">Scans</span>
-                {selectedScans.length > 0 && (
-                  <span className="scan-section-count">
-                    {selectedScans.length}
-                  </span>
+        <div className="table-wrapper">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th className="text-right">Scans</th>
+                <th>Last active</th>
+                <th>Status</th>
+                <th className="text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {userPager.pageItems.map((u) => (
+                <tr key={u.id}>
+                  <td className="cell-strong">{u.name}</td>
+                  <td className="cell-muted">{u.email}</td>
+                  <td className="text-right">{u.scans}</td>
+                  <td className="cell-muted">{u.lastActive}</td>
+                  <td className={statusClass(u.status)}>{u.status}</td>
+                  <td className="text-right">
+                    <button className="link-btn" onClick={() => openUser(u)}>
+                      Manage
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {visibleUsers.length === 0 && (
+                <tr>
+                  <td colSpan="6" className="text-center text-muted">
+                    {emptyMessage}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <Pager pager={userPager} />
+
+        <Modal
+          open={!!selected}
+          onClose={closeUser}
+          title={selected ? `Manage ${selected.name}` : ''}
+          footer={
+            <>
+              <button
+                className="btn btn-outline"
+                onClick={backupUser}
+                disabled={busy}
+              >
+                {busy ? 'Preparing…' : 'Backup user'}
+              </button>
+              <button className="btn btn-outline" onClick={closeUser}>
+                Close
+              </button>
+              <button
+                className={'btn ' + (selectedIsActive ? 'btn-danger' : 'btn-primary')}
+                onClick={toggleStatus}
+              >
+                {selectedIsActive ? 'Suspend user' : 'Reactivate user'}
+              </button>
+            </>
+          }
+        >
+          {selected && (
+            <div className="user-manage-body">
+              <div>
+                <div className="info-row">
+                  <span className="info-row-label">Email</span>
+                  <span className="info-row-value">{selected.email}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-row-label">Total scans</span>
+                  <span className="info-row-value">{selected.scans}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-row-label">Last active</span>
+                  <span className="info-row-value">{selected.lastActive}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-row-label">Status</span>
+                  <span className={statusClass(selected.status)}>{selected.status}</span>
+                </div>
+              </div>
+
+              <div className="scan-section">
+                <div className="scan-section-header">
+                  <span className="scan-section-title">Scans</span>
+                  {selectedScans.length > 0 && (
+                    <span className="scan-section-count">
+                      {selectedScans.length}
+                    </span>
+                  )}
+                </div>
+
+                {loadingScans ? (
+                  <p className="text-muted" style={{ fontSize: 13 }}>
+                    Loading scans…
+                  </p>
+                ) : selectedScans.length === 0 ? (
+                  <p className="text-muted" style={{ fontSize: 13 }}>
+                    This user has no scans yet.
+                  </p>
+                ) : (
+                  <>
+                    <div className="scan-mini-grid">
+                      {visibleScans.map((s) => (
+                        <div key={s.id} className="scan-mini-card">
+                          <div className="scan-mini-thumb">
+                            <ScanImage scan={s} fallback={s.disease} />
+                          </div>
+                          <div className="scan-mini-body">
+                            <div className="scan-title-row">
+                              <span className="scan-title">{s.disease}</span>
+                              {s.flagged && <Badge color="red">flagged</Badge>}
+                              {s.corrected && <Badge color="blue">corrected</Badge>}
+                            </div>
+                            <div className="scan-mini-footer">
+                              <span className={confidenceClass(s.confidence)}>
+                                {(s.confidence * 100).toFixed(0)}%
+                              </span>
+                              <button
+                                className="link-btn"
+                                onClick={() => openReview(s)}
+                              >
+                                Review
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {hasMoreScans && (
+                      <button
+                        className="btn btn-outline btn-sm"
+                        onClick={() => setScanVisibleCount((c) => c + SCANS_PER_PAGE)}
+                        style={{ marginTop: 12 }}
+                      >
+                        Load {Math.min(SCANS_PER_PAGE, selectedScans.length - scanVisibleCount)} more
+                      </button>
+                    )}
+                  </>
                 )}
               </div>
-
-              {loadingScans ? (
-                <p className="text-muted" style={{ fontSize: 13 }}>
-                  Loading scans…
-                </p>
-              ) : selectedScans.length === 0 ? (
-                <p className="text-muted" style={{ fontSize: 13 }}>
-                  This user has no scans yet.
-                </p>
-              ) : (
-                <>
-                  <div className="scan-mini-grid">
-                    {visibleScans.map((s) => (
-                      <div key={s.id} className="scan-mini-card">
-                        <div className="scan-mini-thumb">
-                          <ScanImage scan={s} fallback={s.disease} />
-                        </div>
-                        <div className="scan-mini-body">
-                          <div className="scan-title-row">
-                            <span className="scan-title">{s.disease}</span>
-                            {s.flagged && <Badge color="red">flagged</Badge>}
-                            {s.corrected && <Badge color="blue">corrected</Badge>}
-                          </div>
-                          <div className="scan-mini-footer">
-                            <span className={confidenceClass(s.confidence)}>
-                              {(s.confidence * 100).toFixed(0)}%
-                            </span>
-                            <button
-                              className="link-btn"
-                              onClick={() => openReview(s)}
-                            >
-                              Review
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                  {hasMoreScans && (
-                    <button
-                      className="btn btn-outline btn-sm"
-                      onClick={() => setScanVisibleCount((c) => c + SCANS_PER_PAGE)}
-                      style={{ marginTop: 12 }}
-                    >
-                      Load {Math.min(SCANS_PER_PAGE, selectedScans.length - scanVisibleCount)} more
-                    </button>
-                  )}
-                </>
-              )}
             </div>
-          </div>
-        )}
-      </Modal>
+          )}
+        </Modal>
 
-      <Modal
-        open={!!reviewTarget}
-        onClose={closeReview}
-        title="Review scan"
-        footer={
-          <>
-            <button className="btn btn-outline" onClick={closeReview}>
-              Cancel
-            </button>
-            <button className="btn btn-primary" onClick={saveCorrection}>
-              Save correction
-            </button>
-          </>
-        }
-      >
-        {reviewTarget && (
-          <div className="stack-md">
-            <div className="scan-thumb scan-thumb-lg">
-              <ScanImage scan={reviewTarget} fallback={reviewTarget.disease} />
-            </div>
+        <Modal
+          open={!!reviewTarget}
+          onClose={closeReview}
+          title="Review scan"
+          footer={
+            <>
+              <button className="btn btn-outline" onClick={closeReview}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" onClick={saveCorrection}>
+                Save correction
+              </button>
+            </>
+          }
+        >
+          {reviewTarget && (
+            <div className="stack-md">
+              <div className="scan-thumb scan-thumb-lg">
+                <ScanImage scan={reviewTarget} fallback={reviewTarget.disease} />
+              </div>
 
-            <div>
-              <div className="info-row">
-                <span className="info-row-label">Region</span>
-                <span className="info-row-value">{reviewTarget.region}</span>
+              <div>
+                <div className="info-row">
+                  <span className="info-row-label">Region</span>
+                  <span className="info-row-value">{reviewTarget.region}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-row-label">Date</span>
+                  <span className="info-row-value">{reviewTarget.date}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-row-label">AI predicted</span>
+                  <span className="info-row-value">
+                    {reviewTarget.disease} (
+                    {(reviewTarget.confidence * 100).toFixed(0)}%)
+                  </span>
+                </div>
               </div>
-              <div className="info-row">
-                <span className="info-row-label">Date</span>
-                <span className="info-row-value">{reviewTarget.date}</span>
-              </div>
-              <div className="info-row">
-                <span className="info-row-label">AI predicted</span>
-                <span className="info-row-value">
-                  {reviewTarget.disease} (
-                  {(reviewTarget.confidence * 100).toFixed(0)}%)
-                </span>
+
+              <div>
+                <label className="label">Correct label</label>
+                <select
+                  className="input"
+                  value={newLabel}
+                  onChange={(e) => setNewLabel(e.target.value)}
+                >
+                  {diseases.map((d) => (
+                    <option key={d.code} value={d.code}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
-
-            <div>
-              <label className="label">Correct label</label>
-              <select
-                className="input"
-                value={newLabel}
-                onChange={(e) => setNewLabel(e.target.value)}
-              >
-                {diseases.map((d) => (
-                  <option key={d.code} value={d.code}>
-                    {d.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </div>
-        )}
-      </Modal>
-    </div>
+          )}
+        </Modal>
+      </div>
+    </>
   );
 }

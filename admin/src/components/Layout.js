@@ -1,6 +1,5 @@
 import { Outlet, Navigate } from 'react-router-dom';
 import Sidebar from './Sidebar';
-import Topbar from './Topbar';
 import ErrorBoundary from './ErrorBoundary';
 import { useAuth } from '../context/AuthContext';
 
@@ -21,7 +20,6 @@ export default function Layout() {
     <div className="app-shell">
       <Sidebar />
       <div className="main-area">
-        <Topbar />
         <main className="content">
           <ErrorBoundary>
             <Outlet />

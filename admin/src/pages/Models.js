@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import PageHeader from '../components/PageHeader';
 import Badge from '../components/Badge';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../context/ToastContext';
@@ -57,61 +58,68 @@ export default function Models() {
     }
   };
 
-  if (loading) return <p className="text-muted">Loading…</p>;
+  if (loading) {
+    return (
+      <>
+        <PageHeader title="Model Management" />
+        <div className="stack-lg">
+          <p className="text-muted">Loading…</p>
+        </div>
+      </>
+    );
+  }
 
   return (
-    <div className="stack-lg">
-      <div className="flex-between">
-        <p className="page-subtitle">
-          Choose which model the app should use for disease detection.
-        </p>
-        <span className="text-muted" style={{ fontSize: 12 }}>
-          Last changed: {fmtDate(updatedAt)}
-        </span>
-      </div>
+    <>
+      <PageHeader
+        title="Model Management"
+        subtitle={`Last changed: ${fmtDate(updatedAt)}`}
+      />
 
-      <div className="grid-2">
-        {MODELS.map((m) => {
-          const active = m.id === activeId;
-          return (
-            <div
-              key={m.id}
-              className="card"
-              style={active ? { borderColor: 'var(--primary)' } : undefined}
-            >
-              <div className="flex-between" style={{ marginBottom: 12 }}>
-                <div className="card-title" style={{ marginBottom: 0 }}>
-                  {m.name}
-                </div>
-                <Badge color={active ? 'green' : 'gray'}>
-                  {active ? 'Active' : 'Inactive'}
-                </Badge>
-              </div>
-
-              <p className="text-muted" style={{ fontSize: 13, marginBottom: 12 }}>
-                {m.notes}
-              </p>
-
-              <dl style={{ fontSize: 13, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', marginBottom: 16 }}>
-                <dt className="text-muted">File</dt>
-                <dd style={{ wordBreak: 'break-all' }}>{m.file}</dd>
-                <dt className="text-muted">Input</dt>
-                <dd>{m.input}</dd>
-                <dt className="text-muted">Classes</dt>
-                <dd>{m.classes}</dd>
-              </dl>
-
-              <button
-                className={active ? 'btn btn-outline btn-full' : 'btn btn-primary btn-full'}
-                disabled={active || busyId !== null}
-                onClick={() => activate(m)}
+      <div className="stack-lg">
+        <div className="grid-2">
+          {MODELS.map((m) => {
+            const active = m.id === activeId;
+            return (
+              <div
+                key={m.id}
+                className="card"
+                style={active ? { borderColor: 'var(--primary)' } : undefined}
               >
-                {active ? 'Currently in use' : busyId === m.id ? 'Switching…' : 'Use this model'}
-              </button>
-            </div>
-          );
-        })}
+                <div className="flex-between" style={{ marginBottom: 12 }}>
+                  <div className="card-title" style={{ marginBottom: 0 }}>
+                    {m.name}
+                  </div>
+                  <Badge color={active ? 'green' : 'gray'}>
+                    {active ? 'Active' : 'Inactive'}
+                  </Badge>
+                </div>
+
+                <p className="text-muted" style={{ fontSize: 13, marginBottom: 12 }}>
+                  {m.notes}
+                </p>
+
+                <dl style={{ fontSize: 13, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', marginBottom: 16 }}>
+                  <dt className="text-muted">File</dt>
+                  <dd style={{ wordBreak: 'break-all' }}>{m.file}</dd>
+                  <dt className="text-muted">Input</dt>
+                  <dd>{m.input}</dd>
+                  <dt className="text-muted">Classes</dt>
+                  <dd>{m.classes}</dd>
+                </dl>
+
+                <button
+                  className={active ? 'btn btn-outline btn-full' : 'btn btn-primary btn-full'}
+                  disabled={active || busyId !== null}
+                  onClick={() => activate(m)}
+                >
+                  {active ? 'Currently in use' : busyId === m.id ? 'Switching…' : 'Use this model'}
+                </button>
+              </div>
+            );
+          })}
+        </div>
       </div>
-    </div>
+    </>
   );
 }
