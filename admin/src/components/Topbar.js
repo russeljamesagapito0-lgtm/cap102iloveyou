@@ -9,6 +9,7 @@ const PAGE_TITLES = {
   '/models': 'Model Management',
   '/analytics': 'Analytics',
   '/reports': 'Reports',
+  '/feedback': 'Feedback',
   '/maintenance': 'Maintenance',
 };
 

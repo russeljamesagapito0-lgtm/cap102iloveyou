@@ -1,5 +1,6 @@
 import { NavLink } from 'react-router-dom';
 import Icon from './Icon';
+import useOpenFeedbackCount from '../lib/useOpenFeedbackCount';
 
 const SECTIONS = [
   {
@@ -13,6 +14,7 @@ const SECTIONS = [
     links: [
       { to: '/analytics', label: 'Analytics', icon: 'analytics' },
       { to: '/reports',   label: 'Reports',   icon: 'reports' },
+      { to: '/feedback',  label: 'Feedback',  icon: 'feedback' },
     ],
   },
   {
@@ -28,6 +30,8 @@ const navLinkClass = ({ isActive }) =>
   'nav-link' + (isActive ? ' active' : '');
 
 export default function Sidebar() {
+  const openFeedback = useOpenFeedbackCount();
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
@@ -53,6 +57,9 @@ export default function Sidebar() {
                   <Icon name={icon} size={18} />
                 </span>
                 <span className="nav-label">{label}</span>
+                {to === '/feedback' && openFeedback > 0 && (
+                  <span className="nav-count">{openFeedback > 99 ? '99+' : openFeedback}</span>
+                )}
               </NavLink>
             ))}
           </div>

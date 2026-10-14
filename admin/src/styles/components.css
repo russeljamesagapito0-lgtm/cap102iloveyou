@@ -417,6 +417,19 @@ select.input { cursor: pointer; }
   white-space: nowrap;
 }
 
+.nav-count {
+  flex-shrink: 0;
+  min-width: 20px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--error);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+}
+
 .sidebar-footer {
   padding: 16px;
   border-top: 1px solid var(--border);

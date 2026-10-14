@@ -8,6 +8,7 @@ import Maintenance from './pages/Maintenance';
 import Models from './pages/Models';
 import Analytics from './pages/Analytics';
 import Reports from './pages/Reports';
+import Feedback from './pages/Feedback';
 
 const protectedRoutes = [
   { path: '/',      element: <Dashboard /> },
@@ -15,6 +16,7 @@ const protectedRoutes = [
   { path: '/scans', element: <Scans /> },
   { path: '/analytics', element: <Analytics /> },
   { path: '/reports', element: <Reports /> },
+  { path: '/feedback', element: <Feedback /> },
   { path: '/models', element: <Models /> },
   { path: '/maintenance', element: <Maintenance /> },
   // Audit Log now lives inside Maintenance; keep old links working.
