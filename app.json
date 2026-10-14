@@ -36,14 +36,14 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-image-picker",
-      "expo-camera",
-      "expo-file-system",
-      "expo-secure-store",
-      "expo-web-browser",
-      "react-native-fast-tflite",
-      "expo-asset"
-    ],
+  "expo-image-picker",
+  "expo-camera",
+  "expo-file-system",
+  "expo-secure-store",
+  "expo-web-browser",
+  "react-native-fast-tflite",
+  "expo-asset"
+],
     "extra": {
       "supabaseUrl": "https://uevzwcidvqkcwickytuf.supabase.co",
       "supabaseAnonKey": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InVldnp3Y2lkdnFrY3dpY2t5dHVmIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODgxNTA4NTIsImV4cCI6MjEwMzcyNjg1Mn0.K3rDYYU53cNYEsd4Logn3xCKPU7QM-t5uX2Y_BJwBHo",

@@ -33,12 +33,22 @@ const findTabNavigator = (navigation) => {
 
 const ResultScreen = ({ route, navigation }) => {
   const { themeColors, isDarkMode } = useTheme();
-  const { imageUri, preparedImageUri, scanDate, diseaseKey, diseaseLabel, confidence } = route.params || {};
-  const [isSaved, setIsSaved] = useState(false);
+
+  const {
+    imageUri,
+    preparedImageUri,
+    scanDate,
+    diseaseKey,
+    diseaseLabel,
+    confidence,
+    readOnly = false,
+  } = route.params || {};
+
+  const [isSaved, setIsSaved] = useState(readOnly);
   const [isSaving, setIsSaving] = useState(false);
   const [savedOffline, setSavedOffline] = useState(false);
-  const savingRef = useRef(false); // synchronous guard against double taps
-  const scanIdRef = useRef(null);  // one scan id per result screen, so retries never create a second row
+  const savingRef = useRef(false);
+  const scanIdRef = useRef(null);
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [savedModalVisible, setSavedModalVisible] = useState(false);
 
@@ -75,9 +85,8 @@ const ResultScreen = ({ route, navigation }) => {
   const formattedDate = scannedAt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
   const formattedTime = scannedAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
-  // Local-first save: copy the 384px JPEG to pending-scans + enqueue ONE mutation, tell the
-  // user immediately, then (if online) kick off the upload. flushQueue() owns all Supabase writes.
   const saveResult = async () => {
+    if (readOnly) return true; // never re-save a historical scan
     if (savingRef.current || isSavedRef.current) return isSavedRef.current;
     savingRef.current = true;
 
@@ -105,11 +114,11 @@ const ResultScreen = ({ route, navigation }) => {
         preparedImageUri,
         cropType: diseaseData.crop || 'Cassava',
         capturedAt: scannedAt.toISOString(),
-        diseaseCode: DISEASE_INFO[diseaseKey] ? diseaseKey : null, // only known codes
+        diseaseCode: DISEASE_INFO[diseaseKey] ? diseaseKey : null,
         diseaseName: diseaseData.name,
         diseaseType,
         severity: diseaseData.severity || null,
-        accuracy: Number.isFinite(diseaseAccuracy) ? diseaseAccuracy : null, // 0..100
+        accuracy: Number.isFinite(diseaseAccuracy) ? diseaseAccuracy : null,
         description: diseaseData.description || null,
         treatment: diseaseData.treatment || null,
         prevention: diseaseData.prevention || null,
@@ -160,7 +169,7 @@ const ResultScreen = ({ route, navigation }) => {
   };
 
   const showModal = (action) => {
-    if (isSavedRef.current) { action(); return; }
+    if (readOnly || isSavedRef.current) { action(); return; }
     pendingActionRef.current = action;
     setConfirmVisible(true);
   };
@@ -171,7 +180,7 @@ const ResultScreen = ({ route, navigation }) => {
 
   const handleSaveAndContinue = async () => {
     const ok = await saveResult();
-    if (!ok) return; // keep the confirm dialog open so the user can retry
+    if (!ok) return;
     setConfirmVisible(false);
     const action = pendingActionRef.current;
     pendingActionRef.current = null;
@@ -196,7 +205,9 @@ const ResultScreen = ({ route, navigation }) => {
         <TouchableOpacity style={styles.backButton} onPress={handleBackPress} activeOpacity={0.7}>
           <Ionicons name="chevron-back" size={28} color={themeColors.text} />
         </TouchableOpacity>
-        <Text style={[styles.headerText, { color: themeColors.text }]}>Analysis Results</Text>
+        <Text style={[styles.headerText, { color: themeColors.text }]}>
+          {readOnly ? 'Scan Detail' : 'Analysis Results'}
+        </Text>
         <TouchableOpacity style={styles.headerAction} activeOpacity={0.7}>
           <Ionicons name="share-outline" size={24} color={themeColors.text} />
         </TouchableOpacity>
@@ -243,26 +254,38 @@ const ResultScreen = ({ route, navigation }) => {
         </View>
 
         <View style={styles.buttonContainer}>
+          {!readOnly && (
+            <TouchableOpacity
+              style={[styles.button, { backgroundColor: themeColors.primary }, (isSaved || isSaving) && { opacity: 0.6 }]}
+              onPress={saveResult}
+              activeOpacity={0.85}
+              disabled={isSaved || isSaving}
+            >
+              {isSaving ? (
+                <Text style={[styles.buttonText, { color: themeColors['on-primary'] }]}>Saving…</Text>
+              ) : (
+                <>
+                  <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={18} color={themeColors['on-primary']} />
+                  <Text style={[styles.buttonText, { color: themeColors['on-primary'] }]}>{isSaved ? 'Saved' : 'Save'}</Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
+
           <TouchableOpacity
-            style={[styles.button, { backgroundColor: themeColors.primary }, (isSaved || isSaving) && { opacity: 0.6 }]}
-            onPress={saveResult}
+            style={[styles.button, { backgroundColor: themeColors.secondary }]}
+            onPress={navigateToScanAgain}
             activeOpacity={0.85}
-            disabled={isSaved || isSaving}
           >
-            {isSaving ? (
-              <Text style={[styles.buttonText, { color: themeColors['on-primary'] }]}>Saving…</Text>
-            ) : (
-              <>
-                <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={18} color={themeColors['on-primary']} />
-                <Text style={[styles.buttonText, { color: themeColors['on-primary'] }]}>{isSaved ? 'Saved' : 'Save'}</Text>
-              </>
-            )}
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.button, { backgroundColor: themeColors.secondary }]} onPress={navigateToScanAgain} activeOpacity={0.85}>
             <Ionicons name="scan-outline" size={18} color="#FFFFFF" />
             <Text style={[styles.buttonText, { color: '#FFFFFF' }]}>Scan Again</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.button, { backgroundColor: themeColors.surface, borderWidth: 1, borderColor: themeColors.border }]} onPress={navigateToHome} activeOpacity={0.85}>
+
+          <TouchableOpacity
+            style={[styles.button, { backgroundColor: themeColors.surface, borderWidth: 1, borderColor: themeColors.border }]}
+            onPress={navigateToHome}
+            activeOpacity={0.85}
+          >
             <Ionicons name="home-outline" size={18} color={themeColors.text} />
             <Text style={[styles.buttonText, { color: themeColors.text }]}>Home</Text>
           </TouchableOpacity>

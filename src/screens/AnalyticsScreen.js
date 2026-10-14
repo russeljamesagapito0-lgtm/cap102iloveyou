@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo, useRef } from 'react';
 import {
   View,
   Text,
@@ -8,86 +8,545 @@ import {
   ActivityIndicator,
   StatusBar,
   Platform,
-  Share,
+  RefreshControl,
+  LayoutAnimation,
+  UIManager,
+  Alert,
+  Modal,
+  Image,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useFocusEffect } from '@react-navigation/native';
+import * as Print from 'expo-print';
+import * as Sharing from 'expo-sharing';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../utils/supabaseClient';
+import { DISEASE_INFO } from '../constants/diseaseInfo';
 import {
   getCurrentSeason,
   getLastSeason,
   buildSeasonReport,
   buildComparison,
   buildHeadlineAdvice,
-  seasonLabel,
+  buildRollingComparison,
+  buildActionChecklist,
+  ACTION_META,
 } from '../utils/analyticsEngine';
+import { buildSeasonReportHtml } from '../utils/seasonReportPdf';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+  UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+/* ------------------------------------------------------------------ */
+/* Tokens                                                              */
+/* ------------------------------------------------------------------ */
 
 const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 };
-const rounded = { sm: 6, md: 10, lg: 16, xl: 24, full: 9999 };
+const rounded = { sm: 8, md: 12, lg: 18, full: 9999 };
+
+const GREEN_HEALTHY = '#2E9E4F';
+
+const DISEASE_GREENS = ['#1E7A3A', '#2E9E4F', '#4CB86A', '#6ECB87', '#93DCA6'];
+const DISEASE_PALETTE = DISEASE_GREENS;
+
+const SEVERITY = {
+  High: { color: '#D9423A', label: 'High' },
+  Medium: { color: '#E8912D', label: 'Medium' },
+  Low: { color: '#2E9E4F', label: 'Low' },
+};
 
 const RANGES = [
-  { key: 'current', label: 'This Season' },
-  { key: 'last', label: 'Last Season' },
-  { key: 'all', label: 'All Time' },
+  { key: 'current', label: 'This season' },
+  { key: 'last', label: 'Last season' },
+  { key: 'all', label: 'All time' },
 ];
 
-const severityColor = (severity) => {
-  switch (severity) {
-    case 'High': return '#E74C3C';
-    case 'Medium': return '#F39C12';
-    case 'Low': return '#27AE60';
-    default: return '#707A6C';
-  }
+const withAlpha = (hex, a) => {
+  const n = Math.round(a * 255).toString(16).padStart(2, '0');
+  return `${hex}${n}`;
 };
+
+const animateLayout = () =>
+  LayoutAnimation.configureNext(LayoutAnimation.create(180, 'easeInEaseOut', 'opacity'));
+
+const timeAgo = (iso) => {
+  if (!iso) return '';
+  const then = new Date(iso).getTime();
+  const now = Date.now();
+  const diff = Math.max(0, now - then);
+  const min = Math.floor(diff / 60000);
+  const hr = Math.floor(min / 60);
+  const day = Math.floor(hr / 24);
+  if (min < 1) return 'just now';
+  if (min < 60) return `${min} min ago`;
+  if (hr < 24) return `${hr} hour${hr === 1 ? '' : 's'} ago`;
+  if (day < 30) return `${day} day${day === 1 ? '' : 's'} ago`;
+  const months = Math.floor(day / 30);
+  return `${months} month${months === 1 ? '' : 's'} ago`;
+};
+
+const formatScanDate = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+};
+
+const formatScanTime = (iso) => {
+  if (!iso) return '';
+  const d = new Date(iso);
+  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+};
+
+// Normalize a disease code for filtering (matches analyticsEngine's logic).
+const CODE_ALIASES = {
+  cbb: 'bacterial_blight',
+  cbsd: 'cassava_brown_streak',
+  cmd: 'cassava_mosaic',
+  cgm: 'green_mite',
+  cad: 'anthracnose',
+};
+
+const normalizeCode = (raw) => {
+  if (!raw) return null;
+  const k = String(raw).trim().toLowerCase();
+  if (!k) return null;
+  return CODE_ALIASES[k] || k;
+};
+
+/* ------------------------------------------------------------------ */
+/* Small components                                                    */
+/* ------------------------------------------------------------------ */
+
+const HealthBar = ({ healthy, diseases, total, trackColor }) => {
+  if (!total) return null;
+  const segments = [
+    { key: 'healthy', count: healthy, color: GREEN_HEALTHY },
+    ...diseases.map((d, i) => ({
+      key: d.code,
+      count: d.count,
+      color: DISEASE_PALETTE[i % DISEASE_PALETTE.length],
+    })),
+  ].filter((s) => s.count > 0);
+
+  return (
+    <View style={[styles.bar, { backgroundColor: trackColor }]}>
+      {segments.map((s, i) => (
+        <View
+          key={s.key}
+          style={{
+            flex: s.count,
+            backgroundColor: s.color,
+            marginLeft: i === 0 ? 0 : 2,
+          }}
+        />
+      ))}
+    </View>
+  );
+};
+
+const LegendDot = ({ color, label, count, textColor }) => (
+  <View style={styles.legendItem}>
+    <View style={[styles.legendDot, { backgroundColor: color }]} />
+    <Text style={[styles.legendText, { color: textColor }]} numberOfLines={1}>
+      {label}
+    </Text>
+    <Text style={[styles.legendCount, { color: textColor }]}>{count}</Text>
+  </View>
+);
+
+const RollingTrendCard = ({ rolling, themeColors }) => {
+  if (!rolling) return null;
+
+  const tone =
+    rolling.trend === 'worsening'
+      ? { bg: '#D9423A', fg: '#FFFFFF', sub: 'rgba(255,255,255,0.9)' }
+      : rolling.trend === 'improving'
+      ? { bg: '#2E9E4F', fg: '#FFFFFF', sub: 'rgba(255,255,255,0.9)' }
+      : { bg: themeColors.surface, fg: themeColors.text, sub: themeColors.textSecondary };
+
+  const icon =
+    rolling.trend === 'worsening'
+      ? 'trending-up'
+      : rolling.trend === 'improving'
+      ? 'trending-down'
+      : rolling.trend === 'quiet'
+      ? 'moon-outline'
+      : 'remove';
+
+  return (
+    <View style={[styles.rollingCard, { backgroundColor: tone.bg, borderColor: tone.bg }]}>
+      <View style={styles.rollingHeader}>
+        <Ionicons name={icon} size={16} color={tone.fg} />
+        <Text style={[styles.rollingTitle, { color: tone.fg }]}>Last 30 days</Text>
+      </View>
+
+      <Text style={[styles.rollingBody, { color: tone.fg }]}>{rolling.text}</Text>
+
+      {!!rolling.driverText && (
+        <Text style={[styles.rollingDriver, { color: tone.sub }]}>{rolling.driverText}</Text>
+      )}
+    </View>
+  );
+};
+
+const Checklist = ({ items, themeColors }) => {
+  if (!items.length) return null;
+
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionHead}>
+        <Text style={[styles.sectionTitle, { color: themeColors.text }]}>
+          What to do next
+        </Text>
+      </View>
+
+      <View
+        style={[
+          styles.checklistCard,
+          { backgroundColor: themeColors.card, borderColor: themeColors.border },
+        ]}
+      >
+        {items.map((item, i) => {
+          const iconName = ACTION_META.ICON_FOR_ACTION[item.kind];
+          const isLast = i === items.length - 1;
+          const accent =
+            item.kind === 'urgent'
+              ? '#D9423A'
+              : item.kind === 'treat'
+              ? '#E8912D'
+              : item.kind === 'protect'
+              ? themeColors.primary
+              : themeColors.textSecondary;
+
+          return (
+            <View
+              key={item.id}
+              style={[
+                styles.checklistRow,
+                !isLast && {
+                  borderBottomWidth: 1,
+                  borderBottomColor: themeColors.border,
+                },
+              ]}
+            >
+              <View style={[styles.checklistNumber, { backgroundColor: accent + '18' }]}>
+                <Text style={[styles.checklistNumberText, { color: accent }]}>{i + 1}</Text>
+              </View>
+
+              <View style={{ flex: 1 }}>
+                <View style={styles.checklistLabelRow}>
+                  <Ionicons name={iconName} size={14} color={accent} />
+                  <Text
+                    style={[styles.checklistLabel, { color: themeColors.text }]}
+                    numberOfLines={2}
+                  >
+                    {item.label}
+                  </Text>
+                </View>
+                {!!item.detail && (
+                  <Text style={[styles.checklistDetail, { color: themeColors.textSecondary }]}>
+                    {item.detail}
+                  </Text>
+                )}
+              </View>
+            </View>
+          );
+        })}
+      </View>
+    </View>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Scans modal                                                         */
+/* ------------------------------------------------------------------ */
+
+const ScanThumb = ({ scan, style }) => {
+  if (scan.image) {
+    return <Image source={{ uri: scan.image }} style={style} resizeMode="cover" />;
+  }
+  return (
+    <View style={[style, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#E8EDE7' }]}>
+      <Ionicons name="leaf" size={24} color="#2E9E4F" />
+    </View>
+  );
+};
+
+const DiseaseScansModal = ({ visible, item, scans, onClose, onOpenScan, themeColors }) => {
+  if (!item) return null;
+
+  return (
+    <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
+      <View style={styles.scansOverlay}>
+        <View style={[styles.scansSheet, { backgroundColor: themeColors.background }]}>
+          <View style={styles.sheetHandle} />
+
+          <View style={styles.scansHeader}>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.scansTitle, { color: themeColors.text }]} numberOfLines={2}>
+                {item.name}
+              </Text>
+              <Text style={[styles.scansSub, { color: themeColors.textSecondary }]}>
+                {scans.length} scan{scans.length === 1 ? '' : 's'} this season
+              </Text>
+            </View>
+            <TouchableOpacity
+              onPress={onClose}
+              style={[styles.scansCloseBtn, { backgroundColor: themeColors.surface }]}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="close" size={20} color={themeColors.text} />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView
+            contentContainerStyle={styles.scansList}
+            showsVerticalScrollIndicator={false}
+          >
+            {scans.map((scan, i) => {
+              const isLast = i === scans.length - 1;
+              return (
+                <TouchableOpacity
+                  key={scan.id}
+                  style={[
+                    styles.scanRow,
+                    !isLast && { borderBottomWidth: 1, borderBottomColor: themeColors.border },
+                  ]}
+                  onPress={() => onOpenScan(scan)}
+                  activeOpacity={0.7}
+                >
+                  <ScanThumb scan={scan} style={styles.scanThumb} />
+
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.scanRowTitle, { color: themeColors.text }]} numberOfLines={1}>
+                      {formatScanDate(scan.createdAt)}
+                    </Text>
+                    <Text style={[styles.scanRowSub, { color: themeColors.textSecondary }]} numberOfLines={1}>
+                      {formatScanTime(scan.createdAt)}
+                      {scan.accuracy > 0 ? ` · ${Math.round(scan.accuracy * 100)}%` : ''}
+                    </Text>
+                  </View>
+
+                  <Ionicons name="chevron-forward" size={18} color={themeColors.textSecondary} />
+                </TouchableOpacity>
+              );
+            })}
+
+            <View style={{ height: 24 }} />
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Disease card                                                        */
+/* ------------------------------------------------------------------ */
+
+const DiseaseCard = ({
+  item,
+  color,
+  percent,
+  defaultOpen,
+  themeColors,
+  scans,
+  onViewScans,
+}) => {
+  const [open, setOpen] = useState(defaultOpen);
+  const sev = SEVERITY[item.severity];
+  const hasType = item.type && item.type !== 'Unknown';
+  const hasAdvice = !!item.prevention || !!item.treatment;
+
+  const toggle = () => {
+    if (!hasAdvice) return;
+    Haptics.selectionAsync();
+    animateLayout();
+    setOpen((o) => !o);
+  };
+
+  return (
+    <View
+      style={[
+        styles.diseaseCard,
+        { backgroundColor: themeColors.card, borderColor: themeColors.border },
+      ]}
+    >
+      <View style={[styles.diseaseAccent, { backgroundColor: color }]} />
+
+      <TouchableOpacity
+        onPress={toggle}
+        activeOpacity={hasAdvice ? 0.7 : 1}
+        style={styles.diseaseHead}
+        accessibilityRole={hasAdvice ? 'button' : 'text'}
+        accessibilityState={hasAdvice ? { expanded: open } : undefined}
+        accessibilityLabel={`${item.name}, ${item.count} scans${hasAdvice ? ', tap for advice' : ''}`}
+      >
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.diseaseName, { color: themeColors.text }]} numberOfLines={2}>
+            {item.name}
+          </Text>
+
+          <View style={styles.chipRow}>
+            {sev && (
+              <View style={[styles.chip, { backgroundColor: withAlpha(sev.color, 0.14) }]}>
+                <View style={[styles.chipDot, { backgroundColor: sev.color }]} />
+                <Text style={[styles.chipText, { color: sev.color }]}>{sev.label} severity</Text>
+              </View>
+            )}
+            {hasType && (
+              <View style={[styles.chip, { backgroundColor: themeColors.surface }]}>
+                <Text style={[styles.chipText, { color: themeColors.textSecondary }]}>
+                  {item.type}
+                </Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        <View style={styles.diseaseCountCol}>
+          <Text style={[styles.diseaseCountNum, { color: themeColors.text }]}>{item.count}</Text>
+          <Text style={[styles.diseaseCountSub, { color: themeColors.textSecondary }]}>
+            {percent}%
+          </Text>
+        </View>
+
+        {hasAdvice && (
+          <Ionicons
+            name={open ? 'chevron-up' : 'chevron-down'}
+            size={18}
+            color={themeColors.textSecondary}
+            style={{ marginLeft: spacing.sm }}
+          />
+        )}
+      </TouchableOpacity>
+
+      {open && hasAdvice && (
+        <View style={styles.adviceWrap}>
+          {!!item.treatment && (
+            <View
+              style={[
+                styles.adviceBlock,
+                { backgroundColor: withAlpha(themeColors.primary, 0.08) },
+              ]}
+            >
+              <View style={styles.adviceHeader}>
+                <Ionicons name="medkit-outline" size={15} color={themeColors.primary} />
+                <Text style={[styles.adviceLabel, { color: themeColors.primary }]}>
+                  If still active
+                </Text>
+              </View>
+              <Text style={[styles.adviceText, { color: themeColors.text }]}>
+                {item.treatment}
+              </Text>
+            </View>
+          )}
+          {!!item.prevention && (
+            <View
+              style={[
+                styles.adviceBlock,
+                { backgroundColor: withAlpha(themeColors.primary, 0.08) },
+              ]}
+            >
+              <View style={styles.adviceHeader}>
+                <Ionicons
+                  name="shield-checkmark-outline"
+                  size={15}
+                  color={themeColors.primary}
+                />
+                <Text style={[styles.adviceLabel, { color: themeColors.primary }]}>
+                  Before next season
+                </Text>
+              </View>
+              <Text style={[styles.adviceText, { color: themeColors.text }]}>
+                {item.prevention}
+              </Text>
+            </View>
+          )}
+
+          {scans && scans.length > 0 && (
+            <TouchableOpacity
+              style={[
+                styles.viewScansBtn,
+                { backgroundColor: withAlpha(themeColors.primary, 0.12) },
+              ]}
+              onPress={() => {
+                Haptics.selectionAsync();
+                onViewScans(item, scans);
+              }}
+              activeOpacity={0.75}
+            >
+              <Ionicons name="list-outline" size={15} color={themeColors.primary} />
+              <Text style={[styles.viewScansText, { color: themeColors.primary }]}>
+                View all {scans.length} scan{scans.length === 1 ? '' : 's'}
+              </Text>
+              <Ionicons name="arrow-forward" size={15} color={themeColors.primary} />
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+    </View>
+  );
+};
+
+/* ------------------------------------------------------------------ */
+/* Screen                                                              */
+/* ------------------------------------------------------------------ */
 
 const AnalyticsScreen = () => {
   const { themeColors, isDarkMode } = useTheme();
+  const navigation = useNavigation();
 
   const [rawScans, setRawScans] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [initialLoad, setInitialLoad] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [range, setRange] = useState('current');
+  const [exporting, setExporting] = useState(false);
+  const [scansModal, setScansModal] = useState({ visible: false, item: null, scans: [] });
+  const scrollRef = useRef(null);
 
   const loadScans = useCallback(async () => {
     try {
-      setLoading(true);
       const { data: { session } } = await supabase.auth.getSession();
       if (!session?.user?.id) {
         setRawScans([]);
-        setLoading(false);
         return;
       }
 
       const { data, error } = await supabase
         .from('scans')
-        .select('id, disease_name, disease_type, disease_code, severity, accuracy, captured_at, created_at, is_deleted')
+        .select('id, disease_name, disease_type, disease_code, severity, accuracy, captured_at, created_at, is_deleted, image_path, image_url')
         .eq('user_id', session.user.id)
         .eq('is_deleted', false)
         .order('captured_at', { ascending: false });
 
       if (error) {
         console.warn('Analytics load failed:', error.message);
-        setRawScans([]);
-      } else {
-        setRawScans(
-          (data || []).map((r) => ({
-            id: r.id,
-            title: r.disease_name || r.crop_type || 'Untitled Scan',
-            diseaseCode: r.disease_code || null,
-            diseaseType: r.disease_type || 'Healthy',
-            severity: r.severity || 'None',
-            accuracy: typeof r.accuracy === 'number' ? r.accuracy : parseFloat(r.accuracy) || 0,
-            createdAt: r.captured_at || r.created_at,
-          }))
-        );
+        return;
       }
+
+      setRawScans(
+        (data || []).map((r) => ({
+          id: r.id,
+          title: r.disease_name || r.crop_type || 'Untitled Scan',
+          diseaseCode: r.disease_code || null,
+          diseaseName: r.disease_name || null,
+          diseaseType: r.disease_type || null,
+          severity: r.severity || null,
+          accuracy: typeof r.accuracy === 'number' ? r.accuracy : parseFloat(r.accuracy) || 0,
+          createdAt: r.captured_at || r.created_at,
+          // Prefer hosted URL, fall back to local path
+          image: r.image_url || r.image_path || null,
+        }))
+      );
     } catch (err) {
       console.warn('Analytics error:', err.message);
-      setRawScans([]);
     } finally {
-      setLoading(false);
+      setInitialLoad(false);
+      setRefreshing(false);
     }
   }, []);
 
@@ -96,6 +555,11 @@ const AnalyticsScreen = () => {
       loadScans();
     }, [loadScans])
   );
+
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    loadScans();
+  }, [loadScans]);
 
   const currentSeason = useMemo(() => getCurrentSeason(), []);
   const lastSeason = useMemo(() => getLastSeason(), []);
@@ -119,68 +583,160 @@ const AnalyticsScreen = () => {
     return buildComparison(report, lastReport);
   }, [rawScans, range, report, lastSeason]);
 
+  const rolling = useMemo(() => {
+    if (range !== 'current') return null;
+    return buildRollingComparison(rawScans);
+  }, [rawScans, range]);
+
+  const checklist = useMemo(() => buildActionChecklist(report), [report]);
+
   const headline = useMemo(() => buildHeadlineAdvice(report), [report]);
 
-  const handleShare = async () => {
+  const lastScanAt = useMemo(() => {
+    if (!rawScans.length) return null;
+    return rawScans.reduce((newest, s) => {
+      const t = new Date(s.createdAt).getTime();
+      return t > newest ? t : newest;
+    }, 0);
+  }, [rawScans]);
+
+  // Scans that belong to the current range, grouped by normalized disease code.
+  // Used both for the modal list and for rendering per-disease rows.
+  const scansByCode = useMemo(() => {
+    const map = {};
+    for (const s of rawScans) {
+      const c = normalizeCode(s.diseaseCode);
+      if (!c || c === 'healthy') continue;
+      if (!map[c]) map[c] = [];
+      map[c].push(s);
+    }
+    // Sort each group newest-first
+    for (const c of Object.keys(map)) {
+      map[c].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    }
+    return map;
+  }, [rawScans]);
+
+  const openScansModal = (item, scans) => {
+    setScansModal({ visible: true, item, scans });
+  };
+
+  const closeScansModal = () => {
+    setScansModal({ visible: false, item: null, scans: [] });
+  };
+
+  const openScanDetail = (scan) => {
+    Haptics.selectionAsync();
+    closeScansModal();
+
+    const code = normalizeCode(scan.diseaseCode);
+    const info = code ? DISEASE_INFO[code] : null;
+
+    navigation.navigate('Result', {
+      imageUri: scan.image || null,
+      preparedImageUri: null,
+      scanDate: scan.createdAt,
+      diseaseKey: info ? code : null,
+      diseaseLabel: info?.name || scan.diseaseName || 'Unknown',
+      confidence: scan.accuracy,
+      readOnly: true,
+    });
+  };
+
+  const handleExportPdf = async () => {
+    if (exporting || report.totalScans === 0) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-
-    const lines = [
-      `RootCare Seasonal Report`,
-      report.label,
-      ``,
-      `Total scans: ${report.totalScans}`,
-      `Healthy: ${report.healthyCount} (${report.healthyPct}%)`,
-      `Diseased: ${report.diseasedCount} (${report.diseasedPct}%)`,
-      ``,
-    ];
-
-    if (headline) {
-      lines.push(headline.title);
-      lines.push(headline.body);
-      lines.push('');
-    }
-
-    if (report.breakdown.length === 0) {
-      lines.push('No diseases detected this season.');
-    } else {
-      lines.push('Diseases found:');
-      for (const b of report.breakdown) {
-        lines.push(`- ${b.name} (${b.count} scan${b.count === 1 ? '' : 's'})`);
-        if (b.prevention) lines.push(`  Prevention: ${b.prevention}`);
-        if (b.treatment) lines.push(`  Treatment: ${b.treatment}`);
-        lines.push('');
-      }
-    }
-
-    lines.push(`Generated by RootCare on ${new Date().toLocaleDateString()}`);
+    setExporting(true);
 
     try {
-      await Share.share({
-        title: `RootCare Seasonal Report — ${report.label}`,
-        message: lines.join('\n'),
+      let user = null;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (session?.user?.id) {
+          const { data: profile } = await supabase
+            .from('profiles')
+            .select('first_name, last_name, full_name, region')
+            .eq('id', session.user.id)
+            .maybeSingle();
+          user = profile || null;
+        }
+      } catch (_) {}
+
+      const html = buildSeasonReportHtml({
+        report,
+        comparison,
+        headline,
+        rolling,
+        checklist,
+        user,
       });
+      const { uri } = await Print.printToFileAsync({ html });
+
+      const canShare = await Sharing.isAvailableAsync();
+      if (!canShare) {
+        Alert.alert(
+          'Sharing unavailable',
+          'This device cannot open the share sheet. The PDF was still generated.'
+        );
+        return;
+      }
+
+      await Sharing.shareAsync(uri, {
+        mimeType: 'application/pdf',
+        dialogTitle: `RootCare Season Report — ${report.label}`,
+        UTI: 'com.adobe.pdf',
+      });
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
-      console.warn('Share failed:', err.message);
+      console.warn('PDF export failed:', err?.message);
+      Alert.alert('Export failed', err?.message || 'Could not generate the PDF.');
+    } finally {
+      setExporting(false);
     }
   };
 
-  const renderStatCard = (label, value, sub, accent) => (
-    <View style={[styles.statCard, { backgroundColor: themeColors.card, borderColor: themeColors.border }]}>
-      <Text style={[styles.statLabel, { color: themeColors.textSecondary }]}>{label}</Text>
-      <Text style={[styles.statValue, { color: accent || themeColors.text }]}>{value}</Text>
-      {!!sub && <Text style={[styles.statSub, { color: themeColors.textSecondary }]}>{sub}</Text>}
-    </View>
-  );
+  const changeRange = (key) => {
+    if (key === range) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    animateLayout();
+    setRange(key);
+    scrollRef.current?.scrollTo({ y: 0, animated: false });
+  };
 
-  if (loading) {
+  if (initialLoad) {
     return (
-      <SafeAreaView style={[styles.container, { backgroundColor: themeColors.background }]} edges={['top']}>
+      <SafeAreaView
+        style={[styles.container, { backgroundColor: themeColors.background }]}
+        edges={['top']}
+      >
         <View style={styles.centerFill}>
           <ActivityIndicator size="large" color={themeColors.primary} />
+          <Text style={[styles.loadingText, { color: themeColors.textSecondary }]}>
+            Gathering your scans…
+          </Text>
         </View>
       </SafeAreaView>
     );
   }
+
+  const hasScans = report.totalScans > 0;
+  const allHealthy = hasScans && report.breakdown.length === 0;
+  const heroColor = allHealthy
+    ? GREEN_HEALTHY
+    : report.diseasedPct >= 50
+    ? themeColors.primary
+    : themeColors.text;
+
+  const heroLine = !hasScans
+    ? ''
+    : allHealthy
+    ? `All ${report.totalScans} scan${report.totalScans === 1 ? '' : 's'} came back healthy`
+    : `${report.healthyCount} of ${report.totalScans} scan${report.totalScans === 1 ? '' : 's'} ${
+        report.healthyCount === 1 ? 'was' : 'were'
+      } healthy`;
+
+  const lastScanLabel = lastScanAt ? `Last scan: ${timeAgo(new Date(lastScanAt).toISOString())}` : '';
 
   return (
     <SafeAreaView
@@ -189,251 +745,622 @@ const AnalyticsScreen = () => {
     >
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
 
-      <View style={[styles.header, { borderBottomColor: themeColors.border }]}>
-        <Text style={[styles.headerTitle, { color: themeColors.text }]}>Season Analytics</Text>
-        {report.totalScans > 0 && (
-          <TouchableOpacity onPress={handleShare} style={styles.shareBtn} activeOpacity={0.7}>
-            <Ionicons name="share-outline" size={22} color={themeColors.primary} />
+      <View style={styles.header}>
+        <View style={{ flex: 1 }}>
+          <Text style={[styles.headerEyebrow, { color: themeColors.textSecondary }]}>
+            Analytics
+          </Text>
+          <Text style={[styles.headerTitle, { color: themeColors.text }]}>
+            Season report
+          </Text>
+          {hasScans && (
+            <Text style={[styles.headerSub, { color: themeColors.textSecondary }]}>
+              {report.label}
+              {lastScanLabel ? ` · ${lastScanLabel}` : ''}
+            </Text>
+          )}
+        </View>
+
+        {hasScans && (
+          <TouchableOpacity
+            onPress={handleExportPdf}
+            disabled={exporting}
+            style={[
+              styles.shareBtn,
+              { backgroundColor: themeColors.surface },
+              exporting && { opacity: 0.6 },
+            ]}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Export PDF report"
+          >
+            {exporting ? (
+              <ActivityIndicator size="small" color={themeColors.primary} />
+            ) : (
+              <Ionicons name="share-outline" size={20} color={themeColors.primary} />
+            )}
           </TouchableOpacity>
         )}
       </View>
 
       <View style={[styles.rangeBar, { backgroundColor: themeColors.surface }]}>
-        {RANGES.map((r) => (
-          <TouchableOpacity
-            key={r.key}
-            style={[styles.rangeBtn, range === r.key && { backgroundColor: themeColors.primary }]}
-            onPress={() => {
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-              setRange(r.key);
-            }}
-            activeOpacity={0.7}
-          >
-            <Text
-              style={[
-                styles.rangeText,
-                { color: range === r.key ? themeColors['on-primary'] : themeColors.textSecondary },
-              ]}
+        {RANGES.map((r) => {
+          const active = range === r.key;
+          return (
+            <TouchableOpacity
+              key={r.key}
+              style={[styles.rangeBtn, active && { backgroundColor: themeColors.primary }]}
+              onPress={() => changeRange(r.key)}
+              activeOpacity={0.8}
+              accessibilityRole="button"
+              accessibilityState={{ selected: active }}
             >
-              {r.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+              <Text
+                style={[
+                  styles.rangeText,
+                  { color: active ? themeColors['on-primary'] : themeColors.textSecondary },
+                ]}
+              >
+                {r.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
       </View>
 
       <ScrollView
+        ref={scrollRef}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor={themeColors.primary}
+            colors={[themeColors.primary]}
+          />
+        }
       >
-        {report.totalScans === 0 ? (
-          <View style={[styles.emptyCard, { backgroundColor: themeColors.card, borderColor: themeColors.border }]}>
-            <Ionicons name="leaf-outline" size={56} color={themeColors.primary} />
+        {!hasScans ? (
+          <View style={styles.emptyWrap}>
+            <View
+              style={[
+                styles.emptyIcon,
+                { backgroundColor: withAlpha(themeColors.primary, 0.12) },
+              ]}
+            >
+              <Ionicons name="leaf-outline" size={44} color={themeColors.primary} />
+            </View>
             <Text style={[styles.emptyTitle, { color: themeColors.text }]}>
-              {range === 'current' ? 'No scans yet this season' : `No scans in ${report.label}`}
+              {range === 'current' ? 'No scans this season yet' : `No scans in ${report.label}`}
             </Text>
             <Text style={[styles.emptyBody, { color: themeColors.textSecondary }]}>
-              Scan your first leaf to unlock your seasonal report. Once you have scans, we'll show you what went well and what to do next season.
+              Scan a few cassava leaves and this page will show how your field is doing
+              and what to do next.
             </Text>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('Scanner')}
+              style={[styles.emptyCta, { backgroundColor: themeColors.primary }]}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+            >
+              <Ionicons name="scan-outline" size={18} color={themeColors['on-primary']} />
+              <Text style={[styles.emptyCtaText, { color: themeColors['on-primary'] }]}>
+                Scan a leaf
+              </Text>
+            </TouchableOpacity>
           </View>
         ) : (
           <>
-            <Text style={[styles.seasonLabel, { color: themeColors.primary }]}>{report.label}</Text>
+            <View
+              style={[
+                styles.hero,
+                { backgroundColor: themeColors.card, borderColor: themeColors.border },
+              ]}
+            >
+              <Text style={[styles.heroLine, { color: heroColor }]}>{heroLine}</Text>
 
-            <View style={styles.statGrid}>
-              {renderStatCard('Total Scans', report.totalScans, null, themeColors.text)}
-              {renderStatCard('Healthy', report.healthyCount, `${report.healthyPct}%`, '#27AE60')}
-              {renderStatCard('Diseased', report.diseasedCount, `${report.diseasedPct}%`, '#E74C3C')}
+              <HealthBar
+                healthy={report.healthyCount}
+                diseases={report.breakdown}
+                total={report.totalScans}
+                trackColor={themeColors.surface}
+              />
+
+              <View style={styles.legend}>
+                <LegendDot
+                  color={GREEN_HEALTHY}
+                  label="Healthy"
+                  count={report.healthyCount}
+                  textColor={themeColors.text}
+                />
+                {report.breakdown.map((b, i) => (
+                  <LegendDot
+                    key={b.code}
+                    color={DISEASE_PALETTE[i % DISEASE_PALETTE.length]}
+                    label={b.name}
+                    count={b.count}
+                    textColor={themeColors.text}
+                  />
+                ))}
+              </View>
+
+              {comparison && (
+                <View style={[styles.trendRow, { borderTopColor: themeColors.border }]}>
+                  <View
+                    style={[
+                      styles.trendIcon,
+                      {
+                        backgroundColor: withAlpha(
+                          comparison.diff > 0
+                            ? themeColors.primary
+                            : comparison.diff < 0
+                            ? GREEN_HEALTHY
+                            : themeColors.textSecondary,
+                          0.14
+                        ),
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={
+                        comparison.diff > 0
+                          ? 'trending-up'
+                          : comparison.diff < 0
+                          ? 'trending-down'
+                          : 'remove'
+                      }
+                      size={15}
+                      color={
+                        comparison.diff > 0
+                          ? themeColors.primary
+                          : comparison.diff < 0
+                          ? GREEN_HEALTHY
+                          : themeColors.textSecondary
+                      }
+                    />
+                  </View>
+                  <Text style={[styles.trendText, { color: themeColors.textSecondary }]}>
+                    {comparison.text}
+                  </Text>
+                </View>
+              )}
             </View>
 
-            {comparison && report.totalScans > 0 && (
-              <View style={[styles.compareCard, { backgroundColor: themeColors.surface }]}>
-                <Ionicons
-                  name={comparison.diff > 0 ? 'trending-up' : comparison.diff < 0 ? 'trending-down' : 'remove'}
-                  size={20}
-                  color={comparison.diff > 0 ? '#E74C3C' : comparison.diff < 0 ? '#27AE60' : themeColors.textSecondary}
-                />
-                <Text style={[styles.compareText, { color: themeColors.text }]}>{comparison.text}</Text>
-              </View>
-            )}
+            <RollingTrendCard rolling={rolling} themeColors={themeColors} />
 
             {headline && (
-              <View style={[styles.headlineCard, { backgroundColor: themeColors.primary }]}>
-                <Text style={[styles.headlineTitle, { color: themeColors['on-primary'] }]}>
+              <View
+                style={[
+                  styles.headlineCard,
+                  {
+                    backgroundColor: withAlpha(themeColors.primary, 0.08),
+                    borderLeftColor: themeColors.primary,
+                  },
+                ]}
+              >
+                <Text style={[styles.headlineTitle, { color: themeColors.text }]}>
                   {headline.title}
                 </Text>
-                <Text style={[styles.headlineBody, { color: themeColors['on-primary'] }]}>
+                <Text style={[styles.headlineBody, { color: themeColors.text }]}>
                   {headline.body}
                 </Text>
               </View>
             )}
 
-            {report.breakdown.length > 0 && (
+            <Checklist items={checklist} themeColors={themeColors} />
+
+            {report.breakdown.length > 0 ? (
               <View style={styles.section}>
-                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>
-                  What you faced this season
-                </Text>
+                <View style={styles.sectionHead}>
+                  <Text style={[styles.sectionTitle, { color: themeColors.text }]}>
+                    What your plants faced
+                  </Text>
+                </View>
 
-                {report.breakdown.map((b) => (
-                  <View
-                    key={b.code}
-                    style={[styles.diseaseCard, { backgroundColor: themeColors.card, borderColor: themeColors.border }]}
-                  >
-                    <View style={styles.diseaseHeader}>
-                      <View style={{ flex: 1 }}>
-                        <Text style={[styles.diseaseName, { color: themeColors.text }]}>{b.name}</Text>
-                        <View style={styles.diseaseMetaRow}>
-                          <View style={[styles.severityDot, { backgroundColor: severityColor(b.severity) }]} />
-                          <Text style={[styles.diseaseMeta, { color: themeColors.textSecondary }]}>
-                            {b.severity} severity
-                            {b.type ? ` · ${b.type}` : ''}
-                          </Text>
-                        </View>
-                      </View>
-                      <View style={[styles.countBadge, { backgroundColor: themeColors.surface }]}>
-                        <Text style={[styles.countBadgeText, { color: themeColors.text }]}>
-                          {b.count} scan{b.count === 1 ? '' : 's'}
-                        </Text>
-                      </View>
-                    </View>
-
-                    {!!b.prevention && (
-                      <View style={styles.adviceBlock}>
-                        <View style={styles.adviceHeader}>
-                          <Ionicons name="shield-checkmark-outline" size={16} color={themeColors.primary} />
-                          <Text style={[styles.adviceLabel, { color: themeColors.primary }]}>
-                            For next season
-                          </Text>
-                        </View>
-                        <Text style={[styles.adviceText, { color: themeColors.text }]}>
-                          {b.prevention}
-                        </Text>
-                      </View>
-                    )}
-
-                    {!!b.treatment && (
-                      <View style={styles.adviceBlock}>
-                        <View style={styles.adviceHeader}>
-                          <Ionicons name="medkit-outline" size={16} color="#E74C3C" />
-                          <Text style={[styles.adviceLabel, { color: '#E74C3C' }]}>
-                            If still active
-                          </Text>
-                        </View>
-                        <Text style={[styles.adviceText, { color: themeColors.text }]}>
-                          {b.treatment}
-                        </Text>
-                      </View>
-                    )}
-                  </View>
-                ))}
+                {report.breakdown.map((b, i) => {
+                  const scansForDisease = scansByCode[b.code] || [];
+                  return (
+                    <DiseaseCard
+                      key={`${range}-${b.code}`}
+                      item={b}
+                      color={DISEASE_PALETTE[i % DISEASE_PALETTE.length]}
+                      percent={Math.round((b.count / report.totalScans) * 100)}
+                      defaultOpen={false}
+                      themeColors={themeColors}
+                      scans={scansForDisease}
+                      onViewScans={openScansModal}
+                    />
+                  );
+                })}
               </View>
-            )}
-
-            {report.breakdown.length === 0 && (
-              <View style={[styles.goodCard, { backgroundColor: themeColors.surface }]}>
-                <Ionicons name="checkmark-circle" size={32} color="#27AE60" />
-                <Text style={[styles.goodTitle, { color: themeColors.text }]}>
-                  No diseases detected
-                </Text>
-                <Text style={[styles.goodBody, { color: themeColors.textSecondary }]}>
-                  All your scans came back healthy. Keep up your current routine.
-                </Text>
+            ) : (
+              <View
+                style={[styles.goodCard, { backgroundColor: withAlpha(GREEN_HEALTHY, 0.1) }]}
+              >
+                <Ionicons name="checkmark-circle" size={30} color={GREEN_HEALTHY} />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.goodTitle, { color: themeColors.text }]}>
+                    No diseases detected
+                  </Text>
+                  <Text style={[styles.goodBody, { color: themeColors.textSecondary }]}>
+                    Keep up your current routine and keep scanning regularly.
+                  </Text>
+                </View>
               </View>
             )}
           </>
         )}
       </ScrollView>
+
+      <DiseaseScansModal
+        visible={scansModal.visible}
+        item={scansModal.item}
+        scans={scansModal.scans}
+        onClose={closeScansModal}
+        onOpenScan={openScanDetail}
+        themeColors={themeColors}
+      />
     </SafeAreaView>
   );
 };
 
+/* ------------------------------------------------------------------ */
+/* Styles                                                              */
+/* ------------------------------------------------------------------ */
+
 const styles = StyleSheet.create({
-  container: { flex: 1, ...(Platform.OS === 'web' ? { height: '100vh', overflow: 'hidden' } : {}) },
-  centerFill: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  container: {
+    flex: 1,
+    ...(Platform.OS === 'web' ? { height: '100vh', overflow: 'hidden' } : {}),
+  },
+  centerFill: { flex: 1, justifyContent: 'center', alignItems: 'center', gap: spacing.md },
+  loadingText: { fontSize: 14 },
+
   header: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
+    alignItems: 'flex-start',
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.md,
-    borderBottomWidth: 1,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.xs,
+    gap: spacing.md,
   },
-  headerTitle: { fontSize: 22, fontWeight: '700', letterSpacing: -0.3 },
-  shareBtn: { padding: 6 },
+  headerEyebrow: {
+    fontSize: 11,
+    fontWeight: '700',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  headerTitle: { fontSize: 26, fontWeight: '800', letterSpacing: -0.5 },
+  headerSub: { fontSize: 13, marginTop: 2 },
+  shareBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: rounded.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 4,
+  },
+
   rangeBar: {
     flexDirection: 'row',
-    borderRadius: rounded.md,
-    padding: 3,
+    borderRadius: rounded.full,
+    padding: 4,
     marginHorizontal: spacing.md,
     marginTop: spacing.md,
   },
-  rangeBtn: { flex: 1, alignItems: 'center', paddingVertical: spacing.sm, borderRadius: rounded.sm },
-  rangeText: { fontSize: 12, fontWeight: '600' },
-  scrollContent: { padding: spacing.md, paddingBottom: 100 },
-  seasonLabel: { fontSize: 14, fontWeight: '700', letterSpacing: 0.4, marginBottom: spacing.md, textTransform: 'uppercase' },
-  statGrid: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
-  statCard: {
+  rangeBtn: {
     flex: 1,
-    borderWidth: 1,
-    borderRadius: rounded.md,
-    padding: spacing.md,
     alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 38,
+    borderRadius: rounded.full,
   },
-  statLabel: { fontSize: 11, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 0.5 },
-  statValue: { fontSize: 24, fontWeight: '700', marginTop: 4 },
-  statSub: { fontSize: 11, marginTop: 2 },
-  compareCard: {
+  rangeText: { fontSize: 13, fontWeight: '700' },
+
+  scrollContent: { padding: spacing.md, paddingBottom: 110 },
+
+  hero: {
+    borderWidth: 1,
+    borderRadius: rounded.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  heroLine: {
+    fontSize: 22,
+    fontWeight: '800',
+    letterSpacing: -0.4,
+    lineHeight: 28,
+    marginBottom: spacing.md,
+  },
+  bar: {
+    flexDirection: 'row',
+    height: 14,
+    borderRadius: rounded.full,
+    overflow: 'hidden',
+  },
+  legend: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: spacing.md,
+    rowGap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    maxWidth: '100%',
+  },
+  legendDot: { width: 9, height: 9, borderRadius: 5 },
+  legendText: { fontSize: 13, fontWeight: '600', flexShrink: 1 },
+  legendCount: { fontSize: 13, fontWeight: '800', marginLeft: 2 },
+
+  trendRow: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.sm,
-    padding: spacing.md,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  trendIcon: {
+    width: 26,
+    height: 26,
+    borderRadius: rounded.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  trendText: { fontSize: 12.5, lineHeight: 18, flex: 1 },
+
+  rollingCard: {
+    borderWidth: 1,
     borderRadius: rounded.md,
+    padding: spacing.md,
     marginBottom: spacing.md,
   },
-  compareText: { fontSize: 13, fontWeight: '500', flex: 1 },
-  headlineCard: {
-    borderRadius: rounded.lg,
-    padding: spacing.lg,
-    marginBottom: spacing.lg,
+  rollingHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
   },
-  headlineTitle: { fontSize: 17, fontWeight: '700', marginBottom: 6 },
-  headlineBody: { fontSize: 13, lineHeight: 20, opacity: 0.95 },
+  rollingTitle: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.8,
+    textTransform: 'uppercase',
+  },
+  rollingDriver: {
+    fontSize: 12.5,
+    lineHeight: 18,
+    marginTop: 8,
+    fontWeight: '600',
+  },
+  rollingBody: { fontSize: 13.5, lineHeight: 20, fontWeight: '500' },
+
+  headlineCard: {
+    borderLeftWidth: 4,
+    borderRadius: rounded.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.md,
+  },
+  headlineTitle: { fontSize: 15, fontWeight: '700', marginBottom: 4 },
+  headlineBody: { fontSize: 13.5, lineHeight: 20 },
+
+  checklistCard: {
+    borderWidth: 1,
+    borderRadius: rounded.md,
+    overflow: 'hidden',
+  },
+  checklistRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+  },
+  checklistNumber: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
+  checklistNumberText: { fontSize: 12, fontWeight: '800' },
+  checklistLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 3,
+  },
+  checklistLabel: { fontSize: 14.5, fontWeight: '700', flex: 1, lineHeight: 19 },
+  checklistDetail: { fontSize: 13, lineHeight: 19 },
+
   section: { marginBottom: spacing.lg },
-  sectionTitle: { fontSize: 16, fontWeight: '700', marginBottom: spacing.sm },
+  sectionHead: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    justifyContent: 'space-between',
+    marginBottom: spacing.sm + 2,
+    paddingHorizontal: 2,
+  },
+  sectionTitle: { fontSize: 17, fontWeight: '800', letterSpacing: -0.2 },
+
   diseaseCard: {
     borderWidth: 1,
     borderRadius: rounded.md,
-    padding: spacing.md,
     marginBottom: spacing.sm,
+    overflow: 'hidden',
   },
-  diseaseHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  diseaseName: { fontSize: 15, fontWeight: '700' },
-  diseaseMetaRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
-  severityDot: { width: 8, height: 8, borderRadius: 4 },
-  diseaseMeta: { fontSize: 12 },
-  countBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: rounded.full },
-  countBadgeText: { fontSize: 11, fontWeight: '700' },
-  adviceBlock: { marginTop: spacing.md },
-  adviceHeader: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 4 },
-  adviceLabel: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 0.4 },
-  adviceText: { fontSize: 13, lineHeight: 20 },
+  diseaseAccent: { position: 'absolute', left: 0, top: 0, bottom: 0, width: 5 },
+  diseaseHead: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+    paddingLeft: spacing.md + 5,
+    paddingRight: spacing.md,
+    minHeight: 62,
+  },
+  diseaseName: { fontSize: 15.5, fontWeight: '700', lineHeight: 20 },
+  chipRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 6 },
+  chip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: rounded.full,
+  },
+  chipDot: { width: 6, height: 6, borderRadius: 3 },
+  chipText: { fontSize: 11.5, fontWeight: '600' },
+
+  diseaseCountCol: {
+    alignItems: 'flex-end',
+    marginLeft: spacing.sm,
+    minWidth: 48,
+  },
+  diseaseCountNum: { fontSize: 22, fontWeight: '800', lineHeight: 24 },
+  diseaseCountSub: { fontSize: 11, marginTop: 1, fontWeight: '600' },
+
+  adviceWrap: {
+    paddingLeft: spacing.md + 5,
+    paddingRight: spacing.md,
+    paddingBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  adviceBlock: { borderRadius: rounded.sm, padding: spacing.md },
+  adviceHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 6,
+  },
+  adviceLabel: {
+    fontSize: 11.5,
+    fontWeight: '800',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  adviceText: { fontSize: 13.5, lineHeight: 20 },
+
+  viewScansBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 11,
+    borderRadius: rounded.sm,
+    marginTop: 4,
+  },
+  viewScansText: {
+    fontSize: 13,
+    fontWeight: '700',
+    flex: 1,
+    textAlign: 'center',
+  },
+
+  // Scans modal
+  scansOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  scansSheet: {
+    borderTopLeftRadius: rounded.lg,
+    borderTopRightRadius: rounded.lg,
+    padding: spacing.md,
+    paddingTop: spacing.sm,
+    maxHeight: '85%',
+    minHeight: '50%',
+  },
+  sheetHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: '#CCC',
+    alignSelf: 'center',
+    marginBottom: spacing.md,
+  },
+  scansHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  scansTitle: { fontSize: 18, fontWeight: '800', letterSpacing: -0.3 },
+  scansSub: { fontSize: 13, marginTop: 2 },
+  scansCloseBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  scansList: { paddingBottom: spacing.md },
+  scanRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.sm + 2,
+  },
+  scanThumb: {
+    width: 52,
+    height: 52,
+    borderRadius: rounded.sm,
+  },
+  scanRowTitle: { fontSize: 14.5, fontWeight: '700' },
+  scanRowSub: { fontSize: 12, marginTop: 2 },
+
   goodCard: {
-    borderRadius: rounded.lg,
-    padding: spacing.lg,
+    flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
+    gap: spacing.md,
+    borderRadius: rounded.md,
+    padding: spacing.md,
   },
-  goodTitle: { fontSize: 16, fontWeight: '700', marginTop: 4 },
-  goodBody: { fontSize: 13, textAlign: 'center', lineHeight: 20 },
-  emptyCard: {
-    borderWidth: 1,
-    borderRadius: rounded.lg,
-    padding: spacing.xl,
+  goodTitle: { fontSize: 15, fontWeight: '700' },
+  goodBody: { fontSize: 13, lineHeight: 19, marginTop: 2 },
+
+  emptyWrap: {
     alignItems: 'center',
-    gap: 12,
+    paddingTop: spacing.xl,
+    paddingHorizontal: spacing.md,
+  },
+  emptyIcon: {
+    width: 96,
+    height: 96,
+    borderRadius: rounded.full,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: spacing.lg,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    textAlign: 'center',
+    letterSpacing: -0.3,
+  },
+  emptyBody: {
+    fontSize: 14,
+    lineHeight: 21,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+    maxWidth: 320,
+  },
+  emptyCta: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    minHeight: 48,
+    borderRadius: rounded.full,
     marginTop: spacing.lg,
   },
-  emptyTitle: { fontSize: 17, fontWeight: '700', textAlign: 'center', marginTop: 4 },
-  emptyBody: { fontSize: 13, textAlign: 'center', lineHeight: 20 },
+  emptyCtaText: { fontSize: 15, fontWeight: '700' },
 });
 
 export default AnalyticsScreen;
