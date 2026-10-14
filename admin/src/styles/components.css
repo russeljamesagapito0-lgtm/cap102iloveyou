@@ -1292,3 +1292,24 @@ select.input { cursor: pointer; }
   color: var(--textSecondary);
   margin-top: 4px;
 }
+
+
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 4px 2px;
+}
+
+.pager-info,
+.pager-page {
+  font-size: 13px;
+  color: var(--textSecondary);
+}
+
+.pager-controls { display: flex; align-items: center; gap: 10px; }
+
+.pager .filter-btn:disabled { opacity: 0.5; cursor: default; }
+.pager .filter-btn:disabled:hover { background: var(--card); }

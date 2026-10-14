@@ -1,15 +1,17 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import Modal from '../components/Modal';
+import Pager from '../components/Pager';
+import usePagination from '../lib/usePagination';
 import Badge from '../components/Badge';
 import ScanImage from '../components/ScanImage';
 import useAutoRefresh from '../lib/useAutoRefresh';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
-import { supabase, fmtDate, logAudit } from '../lib/supabase';
+import { supabase, fmtDate, logAudit, fetchPages } from '../lib/supabase';
 
-const PAGE_SIZE = 1000;
 const SCANS_PER_PAGE = 8;
+const USERS_PER_PAGE = 10;
 
 const mapProfile = (p) => ({
   id: p.id,
@@ -42,17 +44,6 @@ const buildScan = (s, names) => ({
   flagged: s.flagged,
   corrected: s.corrected,
 });
-
-const fetchAll = async (query) => {
-  let rows = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
-    if (error) throw error;
-    rows = rows.concat(data);
-    if (data.length < PAGE_SIZE) break;
-  }
-  return rows;
-};
 
 const toUserBackupRows = (profile, scans) => {
   const rows = [
@@ -198,23 +189,34 @@ export default function Users() {
   const diseaseNamesRef = useRef({});
 
   const refreshAll = useCallback(async () => {
-    const { data: prof, error: profError } = await supabase
-      .from('profiles')
-      .select('*, scans(count)')
-      .order('created_at', { ascending: false });
-    if (!profError && prof) setUsers(prof.map(mapProfile));
+    try {
+      const prof = await fetchPages(() =>
+        supabase
+          .from('profiles')
+          .select('*, scans(count)')
+          .order('created_at', { ascending: false })
+          .order('id')
+      );
+      setUsers(prof.map(mapProfile));
+    } catch (e) {
+      // silent refresh: keep the last good list
+    }
 
     const uid = selectedIdRef.current;
     if (uid) {
-      const { data, error } = await supabase
-        .from('scans')
-        .select('*')
-        .eq('user_id', uid)
-        .order('created_at', { ascending: false })
-        .limit(500);
-      if (!error && data) {
+      try {
+        const data = await fetchPages(() =>
+          supabase
+            .from('scans')
+            .select('*')
+            .eq('user_id', uid)
+            .order('created_at', { ascending: false })
+            .order('id')
+        );
         const fresh = data.map((s) => buildScan(s, diseaseNamesRef.current));
         setScanCache((prev) => ({ ...prev, [uid]: fresh }));
+      } catch (e) {
+        // silent refresh: keep the last good scans
       }
     }
   }, []);
@@ -222,11 +224,15 @@ export default function Users() {
   useAutoRefresh(refreshAll, { intervalMs: 10000, table: 'scans' });
 
   useEffect(() => {
-    supabase
-      .from('profiles')
-      .select('*, scans(count)')
-      .order('created_at', { ascending: false })
-      .then(({ data }) => setUsers((data || []).map(mapProfile)));
+    fetchPages(() =>
+      supabase
+        .from('profiles')
+        .select('*, scans(count)')
+        .order('created_at', { ascending: false })
+        .order('id')
+    )
+      .then((data) => setUsers(data.map(mapProfile)))
+      .catch(() => setUsers([]));
 
     supabase
       .from('diseases')
@@ -249,6 +255,8 @@ export default function Users() {
     });
   }, [users, view, query]);
 
+  const userPager = usePagination(visibleUsers, USERS_PER_PAGE, `${view}|${query}`);
+
   const diseaseNames = useMemo(
     () => Object.fromEntries(diseases.map((d) => [d.code, d.name])),
     [diseases]
@@ -262,15 +270,15 @@ export default function Users() {
     if (!scanCache[u.id]) {
       setLoadingScans(true);
       try {
-        const { data, error } = await supabase
-          .from('scans')
-          .select('*')
-          .eq('user_id', u.id)
-          .order('created_at', { ascending: false })
-          .limit(500);
-
-        if (error) throw error;
-        const scans = (data || []).map((s) => buildScan(s, diseaseNames));
+        const data = await fetchPages(() =>
+          supabase
+            .from('scans')
+            .select('*')
+            .eq('user_id', u.id)
+            .order('created_at', { ascending: false })
+            .order('id')
+        );
+        const scans = data.map((s) => buildScan(s, diseaseNames));
         setScanCache((prev) => ({ ...prev, [u.id]: scans }));
       } catch (e) {
         toast.error('Failed to load scans: ' + e.message);
@@ -361,12 +369,15 @@ export default function Users() {
         .single();
       if (pErr) throw pErr;
 
-      const scans = await fetchAll(
-        supabase
-          .from('scans')
-          .select('*')
-          .eq('user_id', selected.id)
-          .order('created_at', { ascending: false })
+      const scans = await fetchPages(
+        () =>
+          supabase
+            .from('scans')
+            .select('*')
+            .eq('user_id', selected.id)
+            .order('created_at', { ascending: false })
+            .order('id'),
+        { max: Infinity }
       );
 
       const rows = toUserBackupRows(profile, scans);
@@ -397,11 +408,13 @@ export default function Users() {
 
     setBusy(true);
     try {
-      const profiles = await fetchAll(
-        supabase.from('profiles').select('*').order('created_at')
+      const profiles = await fetchPages(
+        () => supabase.from('profiles').select('*').order('created_at').order('id'),
+        { max: Infinity }
       );
-      const scans = await fetchAll(
-        supabase.from('scans').select('*').order('created_at')
+      const scans = await fetchPages(
+        () => supabase.from('scans').select('*').order('created_at').order('id'),
+        { max: Infinity }
       );
 
       const rows = toGlobalBackupRows(profiles, scans);
@@ -551,7 +564,7 @@ export default function Users() {
             </tr>
           </thead>
           <tbody>
-            {visibleUsers.map((u) => (
+            {userPager.pageItems.map((u) => (
               <tr key={u.id}>
                 <td className="cell-strong">{u.name}</td>
                 <td className="cell-muted">{u.email}</td>
@@ -575,6 +588,8 @@ export default function Users() {
           </tbody>
         </table>
       </div>
+
+      <Pager pager={userPager} />
 
       <Modal
         open={!!selected}

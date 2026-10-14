@@ -3,7 +3,7 @@ import StatCard from '../components/StatCard';
 import LineChart from '../components/LineChart';
 import BarList from '../components/BarList';
 import { useToast } from '../context/ToastContext';
-import { supabase } from '../lib/supabase';
+import { supabase, fetchPages } from '../lib/supabase';
 import {
   RANGES,
   sinceFor,
@@ -36,10 +36,12 @@ export default function Analytics() {
 
   useEffect(() => {
     Promise.all([
-      supabase.from('profiles').select('id, full_name, email, region, created_at'),
+      fetchPages(() =>
+        supabase.from('profiles').select('id, full_name, email, region, created_at').order('id')
+      ).catch(() => []),
       supabase.from('diseases').select('code,name'),
     ]).then(([p, d]) => {
-      setProfiles(p.data || []);
+      setProfiles(p);
       setDiseases(d.data || []);
     });
   }, []);

@@ -2,14 +2,19 @@ import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import Badge from '../components/Badge';
 import Modal from '../components/Modal';
+import Pager from '../components/Pager';
+import usePagination from '../lib/usePagination';
 import ScanImage from '../components/ScanImage';
 import useAutoRefresh from '../lib/useAutoRefresh';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
-import { supabase, fmtDate, logAudit } from '../lib/supabase';
+import { supabase, fmtDate, logAudit, fetchPages } from '../lib/supabase';
 
 const PAGE_SIZE = 1000;
+const USERS_PER_PAGE = 10;
+const SCANS_PER_PAGE = 12;
+const TABLE_MAX = 5000; // newest scans kept in the table; exports are unlimited
 const LOW_CONFIDENCE = 0.7;
 
 const confidenceClass = (c) => {
@@ -69,12 +74,20 @@ export default function Scans() {
   // Silent refetch (no spinner) used by the auto-refresh below
   const refreshScans = useCallback(async () => {
     if (!namesRef.current) return; // first load not finished yet
-    const { data, error } = await supabase
-      .from('scans')
-      .select('*, profiles(full_name,email)')
-      .order('created_at', { ascending: false })
-      .limit(1000);
-    if (!error && data) setScans(data.map((s) => buildScanObject(s, namesRef.current)));
+    try {
+      const data = await fetchPages(
+        () =>
+          supabase
+            .from('scans')
+            .select('*, profiles(full_name,email)')
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: false }),
+        { max: TABLE_MAX }
+      );
+      setScans(data.map((s) => buildScanObject(s, namesRef.current)));
+    } catch (e) {
+      // silent refresh: keep the last good list
+    }
   }, []);
 
   useAutoRefresh(refreshScans, { intervalMs: 10000, table: 'scans' });
@@ -90,20 +103,27 @@ export default function Scans() {
       setDiseases(d || []);
       namesRef.current = names;
 
-      const { data: p } = await supabase
-        .from('profiles')
-        .select('id, full_name, email')
-        .order('full_name', { ascending: true, nullsFirst: false });
+      const p = await fetchPages(() =>
+        supabase
+          .from('profiles')
+          .select('id, full_name, email')
+          .order('full_name', { ascending: true, nullsFirst: false })
+          .order('id')
+      ).catch(() => []);
 
-      setProfiles(p || []);
+      setProfiles(p);
 
-      const { data } = await supabase
-        .from('scans')
-        .select('*, profiles(full_name,email)')
-        .order('created_at', { ascending: false })
-        .limit(1000);
+      const data = await fetchPages(
+        () =>
+          supabase
+            .from('scans')
+            .select('*, profiles(full_name,email)')
+            .order('created_at', { ascending: false })
+            .order('id', { ascending: false }),
+        { max: TABLE_MAX }
+      ).catch(() => []);
 
-      setScans((data || []).map((s) => buildScanObject(s, names)));
+      setScans(data.map((s) => buildScanObject(s, names)));
 
       if (targetUserId && p) {
         const match = p.find((row) => row.id === targetUserId);
@@ -161,6 +181,13 @@ export default function Scans() {
       return true;
     });
   }, [userScans, filter]);
+
+  const userPager = usePagination(users, USERS_PER_PAGE);
+  const scanPager = usePagination(
+    filtered,
+    SCANS_PER_PAGE,
+    `${selectedUser?.id}|${filter}`
+  );
 
   const flaggedInView = userScans.filter((s) => s.flagged).length;
 
@@ -241,6 +268,7 @@ export default function Scans() {
         .from('scans')
         .select('*, profiles(email)')
         .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
         .range(from, from + PAGE_SIZE - 1);
 
       if (selectedUser?.id) q = q.eq('user_id', selectedUser.id);
@@ -297,7 +325,7 @@ export default function Scans() {
               </tr>
             </thead>
             <tbody>
-              {users.map((u) => (
+              {userPager.pageItems.map((u) => (
                 <tr key={u.id}>
                   <td className="cell-strong">{u.name}</td>
                   <td className="cell-muted">{u.email || '-'}</td>
@@ -326,6 +354,8 @@ export default function Scans() {
             </tbody>
           </table>
         </div>
+
+        <Pager pager={userPager} />
       </div>
     );
   }
@@ -367,7 +397,7 @@ export default function Scans() {
         </div>
       ) : (
         <div className="scan-grid">
-          {filtered.map((s) => (
+          {scanPager.pageItems.map((s) => (
             <div key={s.id} className="scan-card">
               <div className="scan-thumb">
                 <ScanImage scan={s} fallback={s.disease} />
@@ -395,6 +425,8 @@ export default function Scans() {
           )}
         </div>
       )}
+
+      <Pager pager={scanPager} />
 
       <Modal
         open={!!selected}

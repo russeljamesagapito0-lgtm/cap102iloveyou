@@ -1,11 +1,14 @@
 import { useState, useEffect, useMemo } from 'react';
 import Modal from '../components/Modal';
+import Pager from '../components/Pager';
+import usePagination from '../lib/usePagination';
 import { useConfirm } from '../components/ConfirmDialog';
 import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
-import { supabase, fmtDate, logAudit } from '../lib/supabase';
+import { supabase, fmtDate, logAudit, fetchPages } from '../lib/supabase';
 
-const PAGE_SIZE = 1000;
+
+const USERS_PER_PAGE = 10;
 
 const mapProfile = (p) => ({
   id: p.id,
@@ -18,17 +21,6 @@ const mapProfile = (p) => ({
 
 const statusClass = (status) =>
   'status-text ' + (status === 'active' ? 'status-active' : 'status-suspended');
-
-const fetchAll = async (query) => {
-  let rows = [];
-  for (let from = 0; ; from += PAGE_SIZE) {
-    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
-    if (error) throw error;
-    rows = rows.concat(data);
-    if (data.length < PAGE_SIZE) break;
-  }
-  return rows;
-};
 
 const toUserBackupRows = (profile, scans) => {
   const rows = [
@@ -161,12 +153,16 @@ export default function Users() {
   const toast = useToast();
 
   useEffect(() => {
-    supabase
-      .from('profiles')
-      .select('*, scans(count)')
-      .eq('role', 'user')
-      .order('created_at', { ascending: false })
-      .then(({ data }) => setUsers((data || []).map(mapProfile)));
+    fetchPages(() =>
+      supabase
+        .from('profiles')
+        .select('*, scans(count)')
+        .eq('role', 'user')
+        .order('created_at', { ascending: false })
+        .order('id')
+    )
+      .then((data) => setUsers(data.map(mapProfile)))
+      .catch(() => setUsers([]));
   }, []);
 
   const activeCount = users.filter((u) => u.status === 'active').length;
@@ -182,6 +178,8 @@ export default function Users() {
       );
     });
   }, [users, view, query]);
+
+  const userPager = usePagination(visibleUsers, USERS_PER_PAGE, `${view}|${query}`);
 
   const toggleStatus = async () => {
     if (!selected) return;
@@ -258,12 +256,15 @@ export default function Users() {
         .single();
       if (pErr) throw pErr;
 
-      const scans = await fetchAll(
-        supabase
-          .from('scans')
-          .select('*')
-          .eq('user_id', selected.id)
-          .order('created_at', { ascending: false })
+      const scans = await fetchPages(
+        () =>
+          supabase
+            .from('scans')
+            .select('*')
+            .eq('user_id', selected.id)
+            .order('created_at', { ascending: false })
+            .order('id'),
+        { max: Infinity }
       );
 
       const rows = toUserBackupRows(profile, scans);
@@ -294,11 +295,14 @@ export default function Users() {
 
     setBusy(true);
     try {
-      const profiles = await fetchAll(
-        supabase.from('profiles').select('*').eq('role', 'user').order('created_at')
+      const profiles = await fetchPages(
+        () =>
+          supabase.from('profiles').select('*').eq('role', 'user').order('created_at').order('id'),
+        { max: Infinity }
       );
-      const scans = await fetchAll(
-        supabase.from('scans').select('*').order('created_at')
+      const scans = await fetchPages(
+        () => supabase.from('scans').select('*').order('created_at').order('id'),
+        { max: Infinity }
       );
 
       const rows = toGlobalBackupRows(profiles, scans);
@@ -380,7 +384,7 @@ export default function Users() {
             </tr>
           </thead>
           <tbody>
-            {visibleUsers.map((u) => (
+            {userPager.pageItems.map((u) => (
               <tr key={u.id}>
                 <td className="cell-strong">{u.name}</td>
                 <td className="cell-muted">{u.email}</td>
@@ -404,6 +408,8 @@ export default function Users() {
           </tbody>
         </table>
       </div>
+
+      <Pager pager={userPager} />
 
       <Modal
         open={!!selected}

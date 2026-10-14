@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import Icon from '../components/Icon';
 import { useToast } from '../context/ToastContext';
 import { downloadCsv } from '../lib/csv';
-import { supabase, fmtDate, logAudit } from '../lib/supabase';
+import { supabase, fmtDate, logAudit, fetchPages } from '../lib/supabase';
 import { useAuth } from '../context/AuthContext';
 import {
   fetchAll,
@@ -61,10 +61,15 @@ export default function Reports() {
 
   useEffect(() => {
     Promise.all([
-      supabase.from('profiles').select('id, full_name, email, region, plan, status, created_at, last_active_at'),
+      fetchPages(() =>
+        supabase
+          .from('profiles')
+          .select('id, full_name, email, region, plan, status, created_at, last_active_at')
+          .order('id')
+      ).catch(() => []),
       supabase.from('diseases').select('code,name'),
     ]).then(([p, d]) => {
-      setProfiles(p.data || []);
+      setProfiles(p);
       setDiseases(d.data || []);
     });
   }, []);
