@@ -24,11 +24,14 @@ import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { useTheme } from '../context/ThemeContext';
 import { supabase } from '../utils/supabaseClient';
 import { DISEASE_INFO } from '../constants/diseaseInfo';
+import { getSeasonConfig, DEFAULT_SEASON_CONFIG } from '../constants/seasonConfig';
 import {
   getCurrentSeason,
   getLastSeason,
+  getPreviousSeason,
   buildSeasonReport,
   buildComparison,
+  buildSixMonthComparison,
   buildHeadlineAdvice,
   buildRollingComparison,
   buildActionChecklist,
@@ -100,7 +103,6 @@ const formatScanTime = (iso) => {
   return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 };
 
-// Normalize a disease code for filtering (matches analyticsEngine's logic).
 const CODE_ALIASES = {
   cbb: 'bacterial_blight',
   cbsd: 'cassava_brown_streak',
@@ -506,7 +508,13 @@ const AnalyticsScreen = () => {
   const [range, setRange] = useState('current');
   const [exporting, setExporting] = useState(false);
   const [scansModal, setScansModal] = useState({ visible: false, item: null, scans: [] });
+  const [seasonConfigId, setSeasonConfigId] = useState(DEFAULT_SEASON_CONFIG.id);
   const scrollRef = useRef(null);
+
+  const seasonConfig = useMemo(
+    () => getSeasonConfig(seasonConfigId),
+    [seasonConfigId]
+  );
 
   const loadScans = useCallback(async () => {
     try {
@@ -516,20 +524,31 @@ const AnalyticsScreen = () => {
         return;
       }
 
-      const { data, error } = await supabase
-        .from('scans')
-        .select('id, disease_name, disease_type, disease_code, severity, accuracy, captured_at, created_at, is_deleted, image_path, image_url')
-        .eq('user_id', session.user.id)
-        .eq('is_deleted', false)
-        .order('captured_at', { ascending: false });
+      const [profileRes, scansRes] = await Promise.all([
+        supabase
+          .from('profiles')
+          .select('season_config_id')
+          .eq('id', session.user.id)
+          .maybeSingle(),
+        supabase
+          .from('scans')
+          .select('id, disease_name, disease_type, disease_code, severity, accuracy, captured_at, created_at, is_deleted, image_path, image_url')
+          .eq('user_id', session.user.id)
+          .eq('is_deleted', false)
+          .order('captured_at', { ascending: false }),
+      ]);
 
-      if (error) {
-        console.warn('Analytics load failed:', error.message);
+      if (profileRes.data?.season_config_id) {
+        setSeasonConfigId(profileRes.data.season_config_id);
+      }
+
+      if (scansRes.error) {
+        console.warn('Analytics load failed:', scansRes.error.message);
         return;
       }
 
       setRawScans(
-        (data || []).map((r) => ({
+        (scansRes.data || []).map((r) => ({
           id: r.id,
           title: r.disease_name || r.crop_type || 'Untitled Scan',
           diseaseCode: r.disease_code || null,
@@ -538,7 +557,6 @@ const AnalyticsScreen = () => {
           severity: r.severity || null,
           accuracy: typeof r.accuracy === 'number' ? r.accuracy : parseFloat(r.accuracy) || 0,
           createdAt: r.captured_at || r.created_at,
-          // Prefer hosted URL, fall back to local path
           image: r.image_url || r.image_path || null,
         }))
       );
@@ -561,8 +579,14 @@ const AnalyticsScreen = () => {
     loadScans();
   }, [loadScans]);
 
-  const currentSeason = useMemo(() => getCurrentSeason(), []);
-  const lastSeason = useMemo(() => getLastSeason(), []);
+  const currentSeason = useMemo(
+    () => getCurrentSeason(seasonConfig),
+    [seasonConfig]
+  );
+  const lastSeason = useMemo(
+    () => getLastSeason(seasonConfig),
+    [seasonConfig]
+  );
 
   const report = useMemo(() => {
     if (range === 'all') {
@@ -578,10 +602,24 @@ const AnalyticsScreen = () => {
   }, [rawScans, range, currentSeason, lastSeason]);
 
   const comparison = useMemo(() => {
-    if (range !== 'current') return null;
-    const lastReport = buildSeasonReport(rawScans, lastSeason);
-    return buildComparison(report, lastReport);
-  }, [rawScans, range, report, lastSeason]);
+    if (range === 'current') {
+      const lastReport = buildSeasonReport(rawScans, lastSeason);
+      return buildComparison(report, lastReport, 'last season');
+    }
+
+    if (range === 'last') {
+      const seasonBeforeLast = getPreviousSeason(lastSeason, seasonConfig);
+      if (!seasonBeforeLast) return null;
+      const reportBeforeLast = buildSeasonReport(rawScans, seasonBeforeLast);
+      return buildComparison(report, reportBeforeLast, 'the season before');
+    }
+
+    if (range === 'all') {
+      return buildSixMonthComparison(rawScans);
+    }
+
+    return null;
+  }, [rawScans, range, report, lastSeason, seasonConfig]);
 
   const rolling = useMemo(() => {
     if (range !== 'current') return null;
@@ -600,8 +638,6 @@ const AnalyticsScreen = () => {
     }, 0);
   }, [rawScans]);
 
-  // Scans that belong to the current range, grouped by normalized disease code.
-  // Used both for the modal list and for rendering per-disease rows.
   const scansByCode = useMemo(() => {
     const map = {};
     for (const s of rawScans) {
@@ -610,7 +646,6 @@ const AnalyticsScreen = () => {
       if (!map[c]) map[c] = [];
       map[c].push(s);
     }
-    // Sort each group newest-first
     for (const c of Object.keys(map)) {
       map[c].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
     }
@@ -643,33 +678,38 @@ const AnalyticsScreen = () => {
     });
   };
 
+  // Builds the report HTML once, shared by share and print flows.
+  const buildPdfHtml = useCallback(async () => {
+    let user = null;
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (session?.user?.id) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('first_name, last_name, full_name, region')
+          .eq('id', session.user.id)
+          .maybeSingle();
+        user = profile || null;
+      }
+    } catch (_) {}
+
+    return buildSeasonReportHtml({
+      report,
+      comparison,
+      headline,
+      rolling,
+      checklist,
+      user,
+    });
+  }, [report, comparison, headline, rolling, checklist]);
+
   const handleExportPdf = async () => {
     if (exporting || report.totalScans === 0) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     setExporting(true);
 
     try {
-      let user = null;
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (session?.user?.id) {
-          const { data: profile } = await supabase
-            .from('profiles')
-            .select('first_name, last_name, full_name, region')
-            .eq('id', session.user.id)
-            .maybeSingle();
-          user = profile || null;
-        }
-      } catch (_) {}
-
-      const html = buildSeasonReportHtml({
-        report,
-        comparison,
-        headline,
-        rolling,
-        checklist,
-        user,
-      });
+      const html = await buildPdfHtml();
       const { uri } = await Print.printToFileAsync({ html });
 
       const canShare = await Sharing.isAvailableAsync();
@@ -691,6 +731,27 @@ const AnalyticsScreen = () => {
     } catch (err) {
       console.warn('PDF export failed:', err?.message);
       Alert.alert('Export failed', err?.message || 'Could not generate the PDF.');
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const handlePrintPdf = async () => {
+    if (exporting || report.totalScans === 0) return;
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    setExporting(true);
+
+    try {
+      const html = await buildPdfHtml();
+      await Print.printAsync({ html });
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (err) {
+      // Cancelling the native print sheet throws on some platforms — ignore that.
+      const msg = err?.message || '';
+      if (!/cancel/i.test(msg)) {
+        console.warn('Print failed:', msg);
+        Alert.alert('Print failed', msg || 'Could not open the print dialog.');
+      }
     } finally {
       setExporting(false);
     }
@@ -737,6 +798,7 @@ const AnalyticsScreen = () => {
       } healthy`;
 
   const lastScanLabel = lastScanAt ? `Last scan: ${timeAgo(new Date(lastScanAt).toISOString())}` : '';
+  const showPrintButton = Platform.OS !== 'web';
 
   return (
     <SafeAreaView
@@ -762,24 +824,47 @@ const AnalyticsScreen = () => {
         </View>
 
         {hasScans && (
-          <TouchableOpacity
-            onPress={handleExportPdf}
-            disabled={exporting}
-            style={[
-              styles.shareBtn,
-              { backgroundColor: themeColors.surface },
-              exporting && { opacity: 0.6 },
-            ]}
-            activeOpacity={0.7}
-            accessibilityRole="button"
-            accessibilityLabel="Export PDF report"
-          >
-            {exporting ? (
-              <ActivityIndicator size="small" color={themeColors.primary} />
-            ) : (
-              <Ionicons name="share-outline" size={20} color={themeColors.primary} />
+          <View style={styles.headerActions}>
+            <TouchableOpacity
+              onPress={handleExportPdf}
+              disabled={exporting}
+              style={[
+                styles.shareBtn,
+                { backgroundColor: themeColors.surface },
+                exporting && { opacity: 0.6 },
+              ]}
+              activeOpacity={0.7}
+              accessibilityRole="button"
+              accessibilityLabel="Share PDF report"
+            >
+              {exporting ? (
+                <ActivityIndicator size="small" color={themeColors.primary} />
+              ) : (
+                <Ionicons name="share-outline" size={20} color={themeColors.primary} />
+              )}
+            </TouchableOpacity>
+
+            {showPrintButton && (
+              <TouchableOpacity
+                onPress={handlePrintPdf}
+                disabled={exporting}
+                style={[
+                  styles.shareBtn,
+                  { backgroundColor: themeColors.surface },
+                  exporting && { opacity: 0.6 },
+                ]}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Print report"
+              >
+                {exporting ? (
+                  <ActivityIndicator size="small" color={themeColors.primary} />
+                ) : (
+                  <Ionicons name="print-outline" size={20} color={themeColors.primary} />
+                )}
+              </TouchableOpacity>
             )}
-          </TouchableOpacity>
+          </View>
         )}
       </View>
 
@@ -1034,13 +1119,17 @@ const styles = StyleSheet.create({
   },
   headerTitle: { fontSize: 26, fontWeight: '800', letterSpacing: -0.5 },
   headerSub: { fontSize: 13, marginTop: 2 },
+  headerActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: 4,
+  },
   shareBtn: {
     width: 44,
     height: 44,
     borderRadius: rounded.full,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 4,
   },
 
   rangeBar: {
@@ -1263,7 +1352,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // Scans modal
   scansOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
