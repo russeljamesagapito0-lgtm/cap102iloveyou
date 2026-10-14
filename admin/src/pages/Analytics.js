@@ -10,13 +10,10 @@ import {
   fetchAll,
   bucketSeries,
   summarizeByDisease,
-  pct,
   avgConfidence,
-  personName,
 } from '../lib/analytics';
 
-const SCAN_COLS =
-  'id,created_at,user_id,region,disease_code,predicted_code,confidence,flagged,corrected';
+const SCAN_COLS = 'id,created_at,user_id,region,disease_code,confidence';
 const LOW_CONFIDENCE = 0.7;
 
 const CONF_BUCKETS = [
@@ -62,11 +59,8 @@ export default function Analytics() {
 
   const data = useMemo(() => {
     const names = Object.fromEntries(diseases.map((d) => [d.code, d.name]));
-    const profMap = Object.fromEntries(profiles.map((p) => [p.id, p]));
     const total = scans.length;
 
-    const corrected = scans.filter((s) => s.corrected).length;
-    const flagged = scans.filter((s) => s.flagged).length;
     const lowConf = scans.filter((s) => Number(s.confidence) < LOW_CONFIDENCE).length;
     const activeUsers = new Set(scans.map((s) => s.user_id).filter(Boolean)).size;
 
@@ -85,58 +79,15 @@ export default function Analytics() {
       value: scans.filter((s) => b.test(Number(s.confidence) || 0)).length,
     }));
 
-    const regionCounts = {};
-    scans.forEach((s) => {
-      const r = s.region || profMap[s.user_id]?.region || 'Unspecified';
-      regionCounts[r] = (regionCounts[r] || 0) + 1;
-    });
-    const regionItems = Object.entries(regionCounts)
-      .map(([label, value]) => ({ label, value }))
-      .sort((a, b) => b.value - a.value)
-      .slice(0, 8);
-
-    // Which predictions admins end up changing — a rough read on model accuracy.
-    const byPredicted = {};
-    const pairs = {};
-    scans.forEach((s) => {
-      if (!s.predicted_code) return;
-      const row = (byPredicted[s.predicted_code] ||= { code: s.predicted_code, scans: 0, corrected: 0 });
-      row.scans += 1;
-      if (s.corrected) {
-        row.corrected += 1;
-        const key = `${s.predicted_code}>${s.disease_code}`;
-        pairs[key] = (pairs[key] || 0) + 1;
-      }
-    });
-    const predictedRows = Object.values(byPredicted)
-      .map((r) => ({ ...r, name: names[r.code] || r.code }))
-      .sort((a, b) => b.corrected - a.corrected || b.scans - a.scans);
-    const topCorrections = Object.entries(pairs)
-      .map(([k, count]) => {
-        const [from, to] = k.split('>');
-        return { from: names[from] || from, to: names[to] || to, count };
-      })
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
-
-    const perUser = {};
-    scans.forEach((s) => {
-      if (s.user_id) perUser[s.user_id] = (perUser[s.user_id] || 0) + 1;
-    });
-    const topUsers = Object.entries(perUser)
-      .map(([id, count]) => ({ id, count, name: personName(profMap[id]) }))
-      .sort((a, b) => b.count - a.count)
-      .slice(0, 5);
-
     const peak = scanSeries.points.reduce(
       (best, p) => (p.count > (best?.count ?? -1) ? p : best),
       null
     );
 
     return {
-      total, corrected, flagged, lowConf, activeUsers,
+      total, lowConf, activeUsers,
       scanSeries, userSeries, newUsersCount: newUsers.length,
-      diseaseItems, confItems, regionItems, predictedRows, topCorrections, topUsers, peak,
+      diseaseItems, confItems, peak,
     };
   }, [scans, profiles, diseases, range]);
 
@@ -163,16 +114,10 @@ export default function Analytics() {
         </div>
       </div>
 
-      <div className="grid-4">
+      <div className="grid-3">
         <StatCard label="Total Scans" value={data.total} icon="scans" footer={`${data.lowConf} below 70% confidence`} />
         <StatCard label="Active Users" value={data.activeUsers} icon="users" footer={`${data.newUsersCount} new sign-ups`} />
         <StatCard label="Avg Confidence" value={avgConfidence(scans)} icon="check" footer="Across all scans in range" />
-        <StatCard
-          label="Correction Rate"
-          value={pct(data.corrected, data.total, 1)}
-          icon="alert"
-          footer={`${data.corrected} corrected · ${data.flagged} flagged`}
-        />
       </div>
 
       <div className="chart-card">
@@ -227,97 +172,18 @@ export default function Analytics() {
         </div>
       </div>
 
-      <div className="grid-2">
-        <div className="chart-card">
+      <div className="chart-card">
+        <div className="chart-head">
           <div>
             <div className="chart-title">Confidence distribution</div>
-            <div className="chart-sub">How sure the model was</div>
+            <div className="chart-sub">How confident the model was across scans in range</div>
           </div>
+        </div>
+        {data.total === 0 ? (
+          <div className="chart-empty">No scans recorded in this period.</div>
+        ) : (
           <BarList items={data.confItems} total={data.total} />
-        </div>
-
-        <div className="chart-card">
-          <div>
-            <div className="chart-title">Scans by region</div>
-            <div className="chart-sub">Top 8</div>
-          </div>
-          <BarList items={data.regionItems} total={data.total} />
-        </div>
-      </div>
-
-      <div className="grid-2">
-        <div className="chart-card">
-          <div>
-            <div className="chart-title">Model corrections</div>
-            <div className="chart-sub">How often each prediction was changed on review</div>
-          </div>
-          {data.predictedRows.length === 0 ? (
-            <div className="chart-empty">No predictions recorded.</div>
-          ) : (
-            <div className="table-wrapper">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>Predicted</th>
-                    <th className="text-right">Scans</th>
-                    <th className="text-right">Corrected</th>
-                    <th className="text-right">Rate</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.predictedRows.map((r) => (
-                    <tr key={r.code}>
-                      <td className="cell-strong">{r.name}</td>
-                      <td className="text-right">{r.scans}</td>
-                      <td className="text-right">{r.corrected}</td>
-                      <td className="text-right cell-muted">{pct(r.corrected, r.scans, 1)}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-          {data.topCorrections.length > 0 && (
-            <div>
-              <div className="kpi-label" style={{ marginBottom: 8 }}>Most common corrections</div>
-              {data.topCorrections.map((c) => (
-                <div className="info-row" key={`${c.from}-${c.to}`}>
-                  <span className="info-row-label">{c.from} → {c.to}</span>
-                  <span className="info-row-value">{c.count}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div className="chart-card">
-          <div>
-            <div className="chart-title">Most active users</div>
-            <div className="chart-sub">By scans in this period</div>
-          </div>
-          {data.topUsers.length === 0 ? (
-            <div className="chart-empty">No activity in this period.</div>
-          ) : (
-            <div className="table-wrapper">
-              <table className="table">
-                <thead>
-                  <tr>
-                    <th>User</th>
-                    <th className="text-right">Scans</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data.topUsers.map((u) => (
-                    <tr key={u.id}>
-                      <td className="cell-strong">{u.name}</td>
-                      <td className="text-right">{u.count}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
+        )}
       </div>
     </div>
   );

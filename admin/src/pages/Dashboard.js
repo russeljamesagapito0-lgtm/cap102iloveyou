@@ -1,7 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import StatCard from '../components/StatCard';
 import LineChart from '../components/LineChart';
 import { supabase } from '../lib/supabase';
+import useAutoRefresh from '../lib/useAutoRefresh';
+import { formatRelativeTime, useNow } from '../lib/formatRelativeTime';
 
 const sumCounts = (days) => days.reduce((total, d) => total + d.count, 0);
 
@@ -11,13 +13,29 @@ const findPeakDay = (days) =>
 export default function Dashboard() {
   const [stats, setStats] = useState(null);
   const [err, setErr] = useState('');
+  const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
 
-  useEffect(() => {
-    supabase.rpc('admin_dashboard').then(({ data, error }) => {
-      if (error) setErr(error.message);
-      else setStats(data);
-    });
+  const fetchStats = useCallback(async () => {
+    const { data, error } = await supabase.rpc('admin_dashboard');
+    if (error) {
+      setErr(error.message);
+      return;
+    }
+    setErr('');
+    setStats(data);
+    setLastUpdatedAt(new Date());
   }, []);
+
+  // Initial load
+  useEffect(() => {
+    fetchStats();
+  }, [fetchStats]);
+
+  // Silent refresh — updates the timestamp above, no spinner
+  useAutoRefresh(fetchStats, { intervalMs: 15000 });
+
+  // Re-render every 30s so the "X ago" label keeps ticking
+  const now = useNow(30000);
 
   if (err) return <p className="text-muted">Error: {err}</p>;
   if (!stats) return <p className="text-muted">Loading...</p>;
@@ -30,8 +48,21 @@ export default function Dashboard() {
   const scansToday = stats.scansToday;
   const isLive = scansToday > 0;
 
+  const updatedLabel = lastUpdatedAt
+    ? formatRelativeTime(lastUpdatedAt)
+    : '';
+
   return (
     <div className="stack-lg">
+      <div className="page-header">
+        <div>
+          <h1 className="page-title">Dashboard</h1>
+          {updatedLabel && (
+            <p className="page-meta">Updated {updatedLabel}</p>
+          )}
+        </div>
+      </div>
+
       <div className="grid-2">
         <StatCard
           label="Total Scans"

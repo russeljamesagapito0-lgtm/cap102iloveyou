@@ -1168,3 +1168,127 @@ select.input { cursor: pointer; }
   font-size: 12px;
   opacity: 0.7;
 }
+/* ------------------------------------------------------------------ */
+/* Error boundary fallback                                            */
+/* ------------------------------------------------------------------ */
+.error-boundary {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  min-height: 60vh;
+}
+
+.error-boundary-card {
+  width: 100%;
+  max-width: 520px;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 32px 28px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.error-boundary-icon {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  background: var(--warning-bg);
+  color: var(--warning-text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 4px;
+}
+
+.error-boundary-title {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+.error-boundary-body {
+  font-size: 14px;
+  color: var(--textSecondary);
+  line-height: 1.5;
+  margin-bottom: 4px;
+}
+
+.error-boundary-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+.error-boundary-details {
+  margin-top: 12px;
+  width: 100%;
+  text-align: left;
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.error-boundary-details summary {
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--textSecondary);
+  user-select: none;
+  padding: 4px 0;
+}
+
+.error-boundary-details summary:hover {
+  color: var(--text);
+}
+
+.error-boundary-message {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--error);
+  background: var(--error-container);
+  padding: 10px 12px;
+  border-radius: 8px;
+  line-height: 1.5;
+  word-break: break-word;
+}
+
+.error-boundary-stack {
+  margin-top: 10px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--textSecondary);
+  background: var(--surface-container-low);
+  padding: 12px;
+  border-radius: 8px;
+  overflow-x: auto;
+  white-space: pre-wrap;
+  font-family: 'Menlo', 'Consolas', monospace;
+  max-height: 220px;
+}
+/* Dashboard page header */
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.page-title {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.page-meta {
+  font-size: 12px;
+  color: var(--textSecondary);
+  margin-top: 4px;
+}
