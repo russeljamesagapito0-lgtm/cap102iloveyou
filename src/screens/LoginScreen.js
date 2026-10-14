@@ -19,6 +19,7 @@ const CustomModal = ({ visible, onClose, title, message, type = 'success', onCon
       case 'error': return { name: 'alert-circle', color: themeColors.error };
       case 'suspended': return { name: 'ban', color: themeColors.error };
       case 'warning': return { name: 'warning', color: '#F39C12' };
+      case 'google': return { name: 'logo-google', color: '#4285F4' };
       default: return { name: 'information-circle', color: themeColors.primary };
     }
   };
@@ -89,6 +90,23 @@ const LoginScreen = ({ navigation, route }) => {
     }
   }, [route?.params?.suspended]);
 
+  // Returns true if the email exists in the profiles table (i.e. the user has
+  // signed up with some method), false otherwise. Used to distinguish
+  // "wrong password" from "this account is Google-only".
+  const emailExistsInProfiles = async (emailToCheck) => {
+    try {
+      const { data, error } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('email', emailToCheck)
+        .maybeSingle();
+      if (error) return false;
+      return !!data;
+    } catch {
+      return false;
+    }
+  };
+
   const handleLogin = async () => {
     if (!email || !password) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
@@ -121,10 +139,36 @@ const LoginScreen = ({ navigation, route }) => {
 
       if (error) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
-        let message = 'An error occurred during login.';
-        if (error.message.includes('Invalid login credentials')) message = 'Invalid email or password. Please try again.';
-        else if (error.message.includes('Email not confirmed')) message = 'Please confirm your email address before logging in.';
-        return showModal('Error', message, 'error');
+
+        // Supabase returns the same "Invalid login credentials" error whether
+        // the password is wrong or the account has no password (Google-only).
+        // Check the profiles table to distinguish the two cases.
+        if (error.message.includes('Invalid login credentials')) {
+          const exists = await emailExistsInProfiles(cleanEmail);
+
+          if (exists) {
+            // The email is registered but the password didn't match. It's
+            // likely a Google-only account.
+            return showModal(
+              'Use Google Sign-In',
+              'This account was created with Google. Please tap "Continue with Google" below to sign in.',
+              'google',
+              () => handleGoogleLogin()
+            );
+          }
+
+          return showModal(
+            'Error',
+            'No account found for this email. Please check your email or sign up.',
+            'error'
+          );
+        }
+
+        if (error.message.includes('Email not confirmed')) {
+          return showModal('Error', 'Please confirm your email address before logging in.', 'error');
+        }
+
+        return showModal('Error', 'An error occurred during login.', 'error');
       }
 
       const accountStatus = await fetchAccountStatus(data.user.id);
