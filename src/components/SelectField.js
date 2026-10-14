@@ -6,11 +6,6 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../context/ThemeContext';
 
-/**
- * Tap-to-open searchable picker.
- * Props: label, value (display name), options [{code,name}], onSelect(option),
- *        loading, error, onRetry, disabled, hasError, placeholder
- */
 const SelectField = ({
   label, value, options = [], onSelect, loading = false, error = null,
   onRetry, disabled = false, hasError = false, placeholder = 'Select',

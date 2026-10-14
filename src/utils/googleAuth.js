@@ -1,6 +1,3 @@
-// src/utils/googleAuth.js
-// "Continue with Google" via Supabase OAuth (system browser + deep link back into the app).
-// Works for both sign-up and sign-in: Supabase creates the auth user on first use.
 import * as WebBrowser from 'expo-web-browser';
 import * as Linking from 'expo-linking';
 import { supabase } from './supabaseClient';
@@ -41,10 +38,6 @@ const createSessionFromUrl = async (url) => {
   throw new Error('Google sign-in did not return a session.');
 };
 
-// Best-effort: fills in fields that are safe to populate from Google
-// WITHOUT defeating the CompleteProfile gate.
-// Deliberately does NOT fill first_name / last_name — those are set by
-// the user in CompleteProfileScreen.
 const ensureProfile = async (user) => {
   try {
     const meta = user.user_metadata || {};
@@ -68,14 +61,6 @@ const ensureProfile = async (user) => {
   }
 };
 
-/**
- * Runs the whole Google flow.
- * Returns:
- *   { status: 'success', needsProfileSetup: boolean }
- *   { status: 'cancelled' }
- *   { status: 'suspended' }
- *   { status: 'error', message }
- */
 export const signInWithGoogle = async () => {
   try {
     const { data, error } = await supabase.auth.signInWithOAuth({
@@ -105,7 +90,6 @@ export const signInWithGoogle = async () => {
 
     await ensureProfile(session.user);
 
-    // If first_name/last_name are missing, the app will route to CompleteProfile.
     const profileStatus = await fetchProfileStatus(session.user.id);
     const needsProfileSetup = profileStatus !== 'complete';
 

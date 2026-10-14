@@ -69,19 +69,15 @@ export const DISEASE_ALIASES = {
   cassava_green_mottle: 'green_mite',
 };
 
-// Helper: resolve any raw code to a DISEASE_INFO entry.
 export const getDiseaseInfo = (raw) => {
   if (!raw) return null;
   const key = String(raw).trim();
 
-  // Direct hit
   if (DISEASE_INFO[key]) return DISEASE_INFO[key];
 
-  // Lowercase direct hit
   const lower = key.toLowerCase();
   if (DISEASE_INFO[lower]) return DISEASE_INFO[lower];
 
-  // Alias lookup
   const aliased = DISEASE_ALIASES[key] || DISEASE_ALIASES[lower];
   if (aliased && DISEASE_INFO[aliased]) return DISEASE_INFO[aliased];
 

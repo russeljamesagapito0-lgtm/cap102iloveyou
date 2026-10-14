@@ -199,7 +199,6 @@ export default function Users() {
       );
       setUsers(prof.map(mapProfile));
     } catch (e) {
-      // silent refresh: keep the last good list
     }
 
     const uid = selectedIdRef.current;
@@ -216,7 +215,6 @@ export default function Users() {
         const fresh = data.map((s) => buildScan(s, diseaseNamesRef.current));
         setScanCache((prev) => ({ ...prev, [uid]: fresh }));
       } catch (e) {
-        // silent refresh: keep the last good scans
       }
     }
   }, []);

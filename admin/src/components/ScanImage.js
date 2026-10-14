@@ -4,9 +4,6 @@ import { supabase } from '../lib/supabase';
 const BUCKET = 'plant-scans';
 const isStoragePath = (p) => !!p && !/^(file|content|https?):/i.test(p);
 
-// Works whether the bucket is public or private: if the scan has a storage path we ask
-// for a signed URL (needs the admin storage SELECT policy); otherwise we fall back to
-// image_url. Shows `fallback` (placeholder) when there is no image or it fails to load.
 export default function ScanImage({ scan, fallback = null }) {
   const [src, setSrc] = useState(null);
   const [failed, setFailed] = useState(false);

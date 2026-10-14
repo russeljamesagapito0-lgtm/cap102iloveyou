@@ -34,14 +34,10 @@ const CompleteProfileScreen = ({ navigation }) => {
   const [lastNameFocused, setLastNameFocused] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
-  // Block Android back — this screen is mandatory.
   useEffect(() => {
     const sub = BackHandler.addEventListener('hardwareBackPress', () => true);
     return () => sub.remove();
   }, []);
-
-  // If a name is already partially filled (unlikely after Google, but possible),
-  // hydrate from the profile so we don't lose data.
   useEffect(() => {
     (async () => {
       const { data: { session } } = await supabase.auth.getSession();

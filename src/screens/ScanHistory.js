@@ -123,7 +123,6 @@ const HistoryScreen = ({ navigation, route }) => {
 
   const diseaseTypes = ['All', 'Viral', 'Fungal', 'Bacterial', 'Pest', 'Healthy'];
 
-  // ---------- LOAD FROM SUPABASE ----------
   const loadScans = useCallback(async () => {
     try {
       setLoading(true);
@@ -135,7 +134,6 @@ const HistoryScreen = ({ navigation, route }) => {
         return;
       }
 
-      // let any just-saved scan finish uploading so it shows up in the list
       try { await flushQueue(); } catch (_) {}
 
       const { data, error } = await supabase
@@ -319,7 +317,6 @@ const HistoryScreen = ({ navigation, route }) => {
     setConfirmModalVisible(true);
   };
 
-  // ---------- BULK ACTIONS ----------
   const handleBulkUnsave = () => {
     setConfirmConfig({
       icon: 'bookmark-outline',
@@ -416,7 +413,6 @@ const HistoryScreen = ({ navigation, route }) => {
     setConfirmModalVisible(true);
   };
 
-  // ---------- DETAILS / NOTES ----------
   const handleViewDetails = (item) => {
     if (isSelectMode) { toggleSelect(item.id); return; }
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -660,7 +656,6 @@ const HistoryScreen = ({ navigation, route }) => {
     <SafeAreaView style={[styles.container, { backgroundColor: themeColors.background }]} edges={['top']}>
       <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} backgroundColor={themeColors.background} />
 
-      {/* ---------- HEADER ---------- */}
       <View style={[styles.header, { borderBottomColor: themeColors.border }]}>
         {isSelectMode ? (
           <>
@@ -692,7 +687,6 @@ const HistoryScreen = ({ navigation, route }) => {
         )}
       </View>
 
-      {/* ---------- TABS ---------- */}
       <View style={[styles.tabsContainer, { backgroundColor: themeColors.surface, borderBottomColor: themeColors.border }]}>
         {TABS.map((tab) => {
           const isActive = activeTab === tab.key;
@@ -719,7 +713,6 @@ const HistoryScreen = ({ navigation, route }) => {
         })}
       </View>
 
-      {/* ---------- FILTER CHIP ROW ---------- */}
       {(selectedFilter !== 'All' || sortBy !== 'newest') && !isSelectMode && (
         <View style={styles.activeFilterRow}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.activeFilterScroll}>
@@ -745,7 +738,6 @@ const HistoryScreen = ({ navigation, route }) => {
         </View>
       )}
 
-      {/* ---------- LIST ---------- */}
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={themeColors.primary} />
@@ -773,7 +765,6 @@ const HistoryScreen = ({ navigation, route }) => {
         />
       )}
 
-      {/* ---------- BULK ACTION BAR ---------- */}
       {isSelectMode && selectedIds.length > 0 && (
         <View style={[styles.bulkBar, { backgroundColor: themeColors.surface, borderTopColor: themeColors.border }]}>
           {activeTab === 'recent' && (
@@ -835,7 +826,6 @@ const HistoryScreen = ({ navigation, route }) => {
         </View>
       )}
 
-      {/* ---------- FILTER MODAL ---------- */}
       <Modal visible={filterModalVisible} transparent animationType="slide" onRequestClose={() => setFilterModalVisible(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setFilterModalVisible(false)}>
           <View style={[styles.filterSheet, { backgroundColor: themeColors.surface }]}>
@@ -882,7 +872,6 @@ const HistoryScreen = ({ navigation, route }) => {
         </TouchableOpacity>
       </Modal>
 
-      {/* ---------- DETAIL MODAL ---------- */}
       <Modal visible={detailModalVisible} transparent animationType="slide" onRequestClose={() => setDetailModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={[styles.detailSheet, { backgroundColor: themeColors.surface }]}>
@@ -1004,7 +993,6 @@ const HistoryScreen = ({ navigation, route }) => {
         </View>
       </Modal>
 
-      {/* ---------- NOTES MODAL ---------- */}
       <Modal visible={notesModalVisible} transparent animationType="fade" onRequestClose={() => setNotesModalVisible(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setNotesModalVisible(false)}>
           <View style={[styles.notesSheet, { backgroundColor: themeColors.surface }]}>
@@ -1031,7 +1019,6 @@ const HistoryScreen = ({ navigation, route }) => {
         </TouchableOpacity>
       </Modal>
 
-      {/* ---------- CONFIRM MODAL ---------- */}
       <Modal visible={confirmModalVisible} transparent animationType="fade" onRequestClose={() => setConfirmModalVisible(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setConfirmModalVisible(false)}>
           <View style={[styles.confirmSheet, { backgroundColor: themeColors.surface }]}>
@@ -1052,7 +1039,6 @@ const HistoryScreen = ({ navigation, route }) => {
         </TouchableOpacity>
       </Modal>
 
-      {/* ---------- SUCCESS MODAL ---------- */}
       <Modal visible={successModalVisible} transparent animationType="fade" onRequestClose={() => setSuccessModalVisible(false)}>
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setSuccessModalVisible(false)}>
           <View style={[styles.successSheet, { backgroundColor: themeColors.surface }]}>

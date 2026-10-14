@@ -8,7 +8,6 @@ import {
   getCachedScans
 } from '../syncManager';
 
-// Mock dependencies with proper AsyncStorage implementation
 jest.mock('@react-native-async-storage/async-storage', () => {
   let storage = {};
   return {
@@ -72,12 +71,10 @@ describe('Sync Manager', () => {
     await AsyncStorage.clear();
     jest.clearAllMocks();
     
-    // Setup default mock implementations
     supabase.auth.getSession.mockResolvedValue({
       data: { session: { user: { id: 'test_user' } } }
     });
     
-    // Mock successful storage operations
     supabase.storage.from.mockReturnValue({
       upload: jest.fn().mockResolvedValue({ error: null }),
       remove: jest.fn().mockResolvedValue({ error: null })
@@ -146,10 +143,7 @@ describe('Sync Manager', () => {
   });
 
     test('4. flushQueue() successfully empties queue', async () => {
-    // Chainable + "thenable" builder, matching how the real Supabase
-    // query builder behaves: .delete()/.update() return the builder
-    // itself so .eq() can be chained after them, and awaiting the
-    // builder at the end of any chain resolves it.
+  
     const mockQueryBuilder = {
       select: jest.fn().mockReturnThis(),
       insert: jest.fn().mockResolvedValue({ error: null }),
@@ -235,8 +229,6 @@ describe('Sync Manager', () => {
       eq: jest.fn().mockReturnThis(),
     };
     
-    // For fetchAndCacheScans, we need two eq calls
-    // First eq for user_id, second eq for is_deleted
     mockQueryBuilder.eq.mockReturnValueOnce(mockQueryBuilder);
     mockQueryBuilder.eq.mockResolvedValueOnce({
       data: [mockScan],

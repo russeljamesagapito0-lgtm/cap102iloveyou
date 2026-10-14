@@ -14,7 +14,7 @@ import { supabase, fmtDate, logAudit, fetchPages } from '../lib/supabase';
 const PAGE_SIZE = 1000;
 const USERS_PER_PAGE = 10;
 const SCANS_PER_PAGE = 12;
-const TABLE_MAX = 5000; // newest scans kept in the table; exports are unlimited
+const TABLE_MAX = 5000; 
 const LOW_CONFIDENCE = 0.7;
 
 const confidenceClass = (c) => {
@@ -69,9 +69,8 @@ export default function Scans() {
   const [newLabel, setNewLabel] = useState('');
   const confirm = useConfirm();
   const toast = useToast();
-  const namesRef = useRef(null); // disease code -> name, set once the first load has it
+  const namesRef = useRef(null); 
 
-  // Silent refetch (no spinner) used by the auto-refresh below
   const refreshScans = useCallback(async () => {
     if (!namesRef.current) return; // first load not finished yet
     try {
@@ -86,7 +85,6 @@ export default function Scans() {
       );
       setScans(data.map((s) => buildScanObject(s, namesRef.current)));
     } catch (e) {
-      // silent refresh: keep the last good list
     }
   }, []);
 

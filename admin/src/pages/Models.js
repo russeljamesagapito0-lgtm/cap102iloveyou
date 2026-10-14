@@ -30,7 +30,7 @@ export default function Models() {
       })
       .catch((e) => toast.error(`Could not load active model: ${e.message}`))
       .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    
   }, []);
 
   const activate = async (model) => {

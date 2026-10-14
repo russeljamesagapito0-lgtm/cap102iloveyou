@@ -81,7 +81,6 @@ const ResultScreen = ({ route, navigation }) => {
     }
   }, [confirmVisible, savedModalVisible]);
 
-  // Resolve disease info via the alias-aware helper.
   const diseaseData =
     getDiseaseInfo(diseaseKey) ||
     getDiseaseInfo(diseaseLabel) ||

@@ -1,5 +1,4 @@
-﻿// screens/ChatbotScreen.js
-import React, { useState, useRef, useEffect, useCallback } from 'react';
+﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -83,10 +82,10 @@ const previewFromChat = (chat, messagesByChat) => {
 const ChatbotScreen = ({ navigation }) => {
   const { themeColors } = useTheme();
 
-  const [chats, setChats] = useState([]);               // sidebar list
+  const [chats, setChats] = useState([]);               
   const [activeChatId, setActiveChatId] = useState(null);
-  const [messages, setMessages] = useState([]);         // active conversation
-  const [messagesByChat, setMessagesByChat] = useState({}); // cache for sidebar previews
+  const [messages, setMessages] = useState([]);         
+  const [messagesByChat, setMessagesByChat] = useState({}); 
   const [booting, setBooting] = useState(true);
 
   const [inputText, setInputText] = useState('');
@@ -108,12 +107,10 @@ const ChatbotScreen = ({ navigation }) => {
   const flatListRef = useRef(null);
   const [keyboardHeight, setKeyboardHeight] = useState(0);
 
-  // Typing indicator dots
   const dot1 = useRef(new Animated.Value(0.3)).current;
   const dot2 = useRef(new Animated.Value(0.3)).current;
   const dot3 = useRef(new Animated.Value(0.3)).current;
 
-  // Hide bottom tab bar while on this screen
   useFocusEffect(
     React.useCallback(() => {
       const tabNavigator = findTabNavigator(navigation);
@@ -158,9 +155,6 @@ const ChatbotScreen = ({ navigation }) => {
     return () => { a1.stop(); a2.stop(); a3.stop(); };
   }, [isSending, dot1, dot2, dot3]);
 
-  // ---------------------------------------------------------------------------
-  // Bootstrap: load the sidebar list, then open the most recent chat (or create one)
-  // ---------------------------------------------------------------------------
   const refreshChats = useCallback(async () => {
     const list = await loadChats();
     setChats(list);
@@ -194,7 +188,6 @@ const ChatbotScreen = ({ navigation }) => {
           setMessages([makeWelcomeMessage()]);
           setShowSuggestions(true);
         } else {
-          // Couldn't create — still show a usable, session-only chat
           setMessages([makeWelcomeMessage()]);
           setShowSuggestions(true);
         }
@@ -204,9 +197,6 @@ const ChatbotScreen = ({ navigation }) => {
     return () => { cancelled = true; };
   }, [refreshChats, openChat]);
 
-  // ---------------------------------------------------------------------------
-  // Sidebar open/close
-  // ---------------------------------------------------------------------------
   const openHistory = () => {
     setShowHistory(true);
     Animated.timing(slideAnim, { toValue: 0, duration: 280, useNativeDriver: true }).start();
@@ -217,9 +207,6 @@ const ChatbotScreen = ({ navigation }) => {
       .start(() => setShowHistory(false));
   };
 
-  // ---------------------------------------------------------------------------
-  // Send message: persist both turns, then reflect in the UI
-  // ---------------------------------------------------------------------------
   const persistMessage = async (chatId, message) => {
     if (!chatId) return message;
     const row = await appendMessage(chatId, {
@@ -229,7 +216,6 @@ const ChatbotScreen = ({ navigation }) => {
       isError: !!message.isError,
     });
     if (!row) return message;
-    // Preserve any local-only fields on top of the server row
     return { ...message, id: row.id, createdAt: row.created_at };
   };
 
@@ -266,12 +252,10 @@ const ChatbotScreen = ({ navigation }) => {
       createdAt: new Date().toISOString(),
     };
 
-    // Snapshot history (bot + user turns, but not the welcome bubble)
     const conversationSnapshot = messages
       .filter((m) => !m.isWelcome)
       .map((m) => ({ sender: m.sender, text: m.text }));
 
-    // Optimistic UI
     setMessages((prev) => [...prev, userMessage]);
     setInputText('');
     setAttachments([]);
@@ -280,7 +264,6 @@ const ChatbotScreen = ({ navigation }) => {
     setIsSending(true);
 
     try {
-      // Persist the user message first so the chat row's updated_at bumps
       const persistedUser = await persistMessage(activeChatId, userMessage);
 
       setMessages((prev) => prev.map((m) => (m.id === userMessage.id ? persistedUser : m)));
@@ -289,7 +272,6 @@ const ChatbotScreen = ({ navigation }) => {
         return { ...prev, [activeChatId]: list };
       });
 
-      // Ask the model
       let result;
       if (imageUri) {
         result = await sendChatWithImage(conversationSnapshot, trimmed, imageUri);
@@ -314,11 +296,9 @@ const ChatbotScreen = ({ navigation }) => {
         return { ...prev, [activeChatId]: list };
       });
 
-      // Title from first real user message
       const latestForTitle = (messagesByChat[activeChatId] || []).concat([persistedUser]);
       await maybeRetitleFromFirstUserMessage(activeChatId, latestForTitle);
 
-      // Re-sort sidebar (most recent on top)
       await refreshChats();
 
       Haptics.notificationAsync(
@@ -346,10 +326,6 @@ const ChatbotScreen = ({ navigation }) => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     sendMessage(topic.text);
   };
-
-  // ---------------------------------------------------------------------------
-  // New chat / open chat / delete chat
-  // ---------------------------------------------------------------------------
   const handleNewChat = async () => {
     if (isSending) return;
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -430,9 +406,6 @@ const ChatbotScreen = ({ navigation }) => {
     );
   };
 
-  // ---------------------------------------------------------------------------
-  // Attachments
-  // ---------------------------------------------------------------------------
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
@@ -467,9 +440,6 @@ const ChatbotScreen = ({ navigation }) => {
 
   const removeAttachment = (id) => setAttachments(attachments.filter((att) => att.id !== id));
 
-  // ---------------------------------------------------------------------------
-  // Renderers
-  // ---------------------------------------------------------------------------
   const renderMessage = ({ item }) => (
     <View
       style={[
@@ -564,9 +534,6 @@ const ChatbotScreen = ({ navigation }) => {
     </View>
   );
 
-  // ---------------------------------------------------------------------------
-  // Screen
-  // ---------------------------------------------------------------------------
   return (
     <SafeAreaView style={[styles.container, { backgroundColor: themeColors.background }]} edges={['top']}>
       <View style={[styles.header, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>

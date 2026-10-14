@@ -1,9 +1,7 @@
-// Philippine Standard Geographic Code (PSGC) client.
-// Free public API, no key required: https://psgc.gitlab.io/api
+
 const BASE_URL = 'https://psgc.gitlab.io/api';
 const TIMEOUT_MS = 12000;
 
-// Simple in-memory cache so re-opening a dropdown doesn't refetch.
 const cache = new Map();
 
 const byName = (a, b) => a.name.localeCompare(b.name);

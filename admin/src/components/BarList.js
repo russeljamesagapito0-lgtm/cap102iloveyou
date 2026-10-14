@@ -1,4 +1,3 @@
-// Simple horizontal bar list. items: [{ label, value }]
 export default function BarList({ items = [], total, empty = 'No data in this period.' }) {
   if (!items.length) return <div className="chart-empty">{empty}</div>;
 

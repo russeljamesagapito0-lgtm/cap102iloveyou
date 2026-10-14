@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
-# Cap request size to 10 MB. Prevents OOM from a buggy or malicious client.
 app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
 CORS(app, resources={
@@ -148,9 +147,6 @@ except Exception as e:
     logger.error(f"Failed to load model: {e}")
     raise
 
-
-# ---------- Image analysis helpers ----------
-
 def green_ratio(image):
     """Fraction of pixels that are strongly green."""
     if image.mode != 'RGB':
@@ -212,8 +208,6 @@ def assess_cassava(image, probabilities):
         and contrast > MIN_CONTRAST
     )
 
-    # Weighted score — green matters most, then model confidence, then edges,
-    # then overall image quality.
     green_score = 1.0 if is_green else 0.0
     confidence_score = 1.0 if is_confident else 0.0
     edge_score = 1.0 if has_edges else 0.0
@@ -242,7 +236,6 @@ def assess_cassava(image, probabilities):
 
     is_cassava = overall >= MIN_OVERALL_SCORE
 
-    # Hard floor: if the model itself is barely sure, don't accept.
     if max_conf < MIN_MAX_CONFIDENCE:
         logger.warning(f"   Very low confidence ({max_conf:.2%}) - rejecting")
         is_cassava = False
@@ -279,7 +272,6 @@ def preprocess_image(image_b64):
     return arr, original
 
 
-# ---------- Routes ----------
 
 @app.route('/predict', methods=['POST', 'OPTIONS'])
 def predict():

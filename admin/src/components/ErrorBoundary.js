@@ -1,6 +1,3 @@
-// src/components/ErrorBoundary.js
-// Catches render errors in its subtree so a single broken page doesn't
-// blank the whole admin. Sidebar, topbar and navigation stay usable.
 import { Component } from 'react';
 
 export default class ErrorBoundary extends Component {
@@ -14,7 +11,6 @@ export default class ErrorBoundary extends Component {
   }
 
   componentDidCatch(error, info) {
-    // Log so the panel (and you) can see it in the browser console.
     console.error('[ErrorBoundary]', error);
     console.error('[ErrorBoundary] componentStack:', info?.componentStack);
     this.setState({ info });

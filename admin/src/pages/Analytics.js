@@ -57,7 +57,7 @@ export default function Analytics() {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+   
   }, [rangeKey]);
 
   const data = useMemo(() => {

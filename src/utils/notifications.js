@@ -1,17 +1,8 @@
-// src/utils/notifications.js
 import { supabase } from './supabaseClient';
 
-// ---------------------------------------------------------------------------
-// Push-notification preference gate
-//
-// Before any notification is written to the `notifications` table, we check
-// the user's `profiles.push_notifications` flag. If it's false, we skip the
-// insert entirely. Cached for 60s so rapid bursts (e.g. toggling several
-// calendar marks) don't hit the DB repeatedly.
-// ---------------------------------------------------------------------------
 const PREF_CACHE_TTL_MS = 60 * 1000;
 
-let cachedPref = null;      // true | false | null (unknown)
+let cachedPref = null;      
 let cachedPrefAt = 0;
 let inFlightPref = null;
 
@@ -38,11 +29,8 @@ const loadPushPref = async (userId) => {
 
       if (error) {
         console.warn('Push pref load failed:', error.message);
-        // Fail open — if we can't read the pref, allow the notification.
-        // (Better to over-notify than to silently drop a user's alerts.)
         return true;
       }
-      // Default to true if the column is null/undefined.
       const enabled = data?.push_notifications ?? true;
       cachedPref = enabled;
       cachedPrefAt = Date.now();

@@ -70,7 +70,6 @@ const cropCareTips = [
   },
 ];
 
-// ---------- CALENDAR MARK STORAGE ----------
 const CALENDAR_MARK_KEY = '@crop_calendar_marks_v1';
 const MARK_TYPES = {
   plant:   { label: 'Plant',   color: '#0D631B', icon: 'leaf' },
@@ -79,7 +78,6 @@ const MARK_TYPES = {
   rain:    { label: 'Rain',    color: '#0EA5E9', icon: 'rainy' },
 };
 
-// Display order for notification body, regardless of toggle order
 const MARK_ORDER = ['plant', 'water', 'harvest', 'rain'];
 
 const loadCalendarMarks = async () => {
@@ -99,10 +97,6 @@ const saveCalendarMarks = async (marks) => {
   }
 };
 
-// ---------- CALENDAR MARK NOTIFICATION ----------
-// Fires when the user toggles marks on/off. Writes to the notifications
-// table (bell icon) AND shows a toast. One combined notification per
-// day, listing all marks currently active on that day.
 const notifyCalendarMarks = async (dateStr, activeKeys) => {
   const display = new Date(dateStr + 'T00:00:00').toLocaleDateString('en-US', {
     month: 'short', day: 'numeric',
@@ -226,7 +220,6 @@ const fetchWeatherData = async () => {
   };
 };
 
-// ---------- GOOD PLANTING DAY (today only, real-time) ----------
 const buildGoodPlantingDays = (weather, forecast) => {
   if (!weather && (!forecast || forecast.length === 0)) return {};
 
@@ -251,7 +244,6 @@ const buildGoodPlantingDays = (weather, forecast) => {
   return { [todayKey]: good };
 };
 
-// ---------- TODAY-FOCUSED ALERT BUILDER (real-time) ----------
 const buildAlertsFromForecast = (weather, forecast) => {
   if (!weather && (!forecast || forecast.length === 0)) return [];
   const alerts = [];
@@ -383,7 +375,6 @@ const resolveWeatherCardState = (loading, weather, forecast) => {
 
 const isDarkModeSafe = (colors) => colors.text === '#FFFFFF';
 
-// ---------- CROP CARE DETAIL MODAL ----------
 const CropCareDetailModal = ({ visible, tip, onClose, themeColors }) => {
   if (!tip) return null;
 
@@ -427,7 +418,6 @@ const CropCareDetailModal = ({ visible, tip, onClose, themeColors }) => {
   );
 };
 
-// ---------- CALENDAR DAY EDIT MODAL ----------
 const DayMarkModal = ({ visible, dateStr, marks, onToggle, onClose, themeColors }) => {
   if (!dateStr) return null;
   const current = marks[dateStr] || {};
@@ -510,10 +500,8 @@ const WeatherAlertModal = ({ visible, onClose, weather, loading, forecast, onMar
     setMarks(next);
     await saveCalendarMarks(next);
 
-    // Notify (toast + bell icon) with the combined set of marks for that day
     await notifyCalendarMarks(dateStr, activeKeys);
 
-    // Let HomeScreen know so it can refresh its notifications list
     if (typeof onMarksChanged === 'function') onMarksChanged();
   };
 

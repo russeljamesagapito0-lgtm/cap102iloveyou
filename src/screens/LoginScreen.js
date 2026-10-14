@@ -1,4 +1,3 @@
-// screens/LoginScreen.js
 import React, { useState, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Platform,  
@@ -90,9 +89,6 @@ const LoginScreen = ({ navigation, route }) => {
     }
   }, [route?.params?.suspended]);
 
-  // Returns true if the email exists in the profiles table (i.e. the user has
-  // signed up with some method), false otherwise. Used to distinguish
-  // "wrong password" from "this account is Google-only".
   const emailExistsInProfiles = async (emailToCheck) => {
     try {
       const { data, error } = await supabase
@@ -140,15 +136,10 @@ const LoginScreen = ({ navigation, route }) => {
       if (error) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
 
-        // Supabase returns the same "Invalid login credentials" error whether
-        // the password is wrong or the account has no password (Google-only).
-        // Check the profiles table to distinguish the two cases.
         if (error.message.includes('Invalid login credentials')) {
           const exists = await emailExistsInProfiles(cleanEmail);
 
           if (exists) {
-            // The email is registered but the password didn't match. It's
-            // likely a Google-only account.
             return showModal(
               'Use Google Sign-In',
               'This account was created with Google. Please tap "Continue with Google" below to sign in.',

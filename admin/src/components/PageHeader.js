@@ -1,9 +1,3 @@
-// src/components/PageHeader.js
-// Reusable page header. Replaces the old Topbar.
-// Renders the page title (and optional subtitle) on the left, and the
-// settings menu on the right.
-// Pages with their own actions can pass children, which render right-aligned
-// before the settings menu.
 import SettingsMenu from './SettingsMenu';
 
 export default function PageHeader({ title, subtitle, children }) {

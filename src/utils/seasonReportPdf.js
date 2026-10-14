@@ -1,7 +1,3 @@
-// src/utils/seasonReportPdf.js
-// Builds a printable HTML representation of the season report and
-// hands it to expo-print. Returns the HTML string.
-
 const escapeHtml = (s) =>
   String(s ?? '')
     .replace(/&/g, '&amp;')

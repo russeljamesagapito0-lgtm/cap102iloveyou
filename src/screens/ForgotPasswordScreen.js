@@ -1,5 +1,3 @@
-// screens/ForgotPasswordScreen.js
-// Flow: 1) enter email -> 2) enter 6-digit code from email -> 3) set new password
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Platform,
@@ -34,20 +32,13 @@ const ForgotPasswordScreen = ({ navigation, route }) => {
   const [error, setError] = useState('');
   const [cooldown, setCooldown] = useState(0);
 
-  // Tracks whether the code was verified (which creates a session) but the
-  // password was never changed, so we can sign that session out on exit.
   const verifiedRef = useRef(false);
   const completedRef = useRef(false);
-
-  // Resend cooldown timer
   useEffect(() => {
     if (cooldown <= 0) return undefined;
     const t = setTimeout(() => setCooldown((c) => c - 1), 1000);
     return () => clearTimeout(t);
   }, [cooldown]);
-
-  // If the user leaves after verifying the code but before saving a new
-  // password, drop the temporary session so they aren't silently logged in.
   useEffect(() => {
     return () => {
       if (verifiedRef.current && !completedRef.current) {

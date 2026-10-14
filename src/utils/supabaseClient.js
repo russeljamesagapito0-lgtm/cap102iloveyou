@@ -56,7 +56,6 @@ const SecureStoreAdapter = {
   },
 };
 
-// Read from app.json extra section
 const supabaseUrl = Constants.expoConfig?.extra?.supabaseUrl;
 const supabaseAnonKey = Constants.expoConfig?.extra?.supabaseAnonKey;
 

@@ -1,6 +1,4 @@
 import { supabase } from './supabaseClient';
-
-// Mirrors admin/src/lib/appSettings.js
 export const DEFAULT_MAINTENANCE = { enabled: false, message: '', eta: null };
 export const DEFAULT_MODEL_ID = 'convnext_384';
 
@@ -14,11 +12,6 @@ const fetchSetting = async (key) => {
   return data?.value ?? null;
 };
 
-/**
- * Returns { enabled, message, eta }.
- * Fails OPEN: if the request fails (offline, Supabase down, table missing)
- * the app is treated as NOT in maintenance, so offline scanning keeps working.
- */
 const withTimeout = (promise, ms) =>
   Promise.race([
     promise,
@@ -35,7 +28,6 @@ export const fetchMaintenance = async () => {
   }
 };
 
-/** Which model the admin has selected. Not wired into inference yet. */
 export const fetchActiveModelId = async () => {
   try {
     const value = await fetchSetting('active_model');

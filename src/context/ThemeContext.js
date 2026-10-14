@@ -77,11 +77,11 @@ const darkColors = {
   'surface-variant': '#444444',
   'surface-tint': '#88D982',
 
-  text: '#FFFFFF',            // ✅ NOW WHITE in dark mode
-  textSecondary: '#B0B0B0',   // ✅ muted light grey
-  border: '#444444',          // ✅ dark border
-  card: '#1E1E1E',            // ✅ dark card
-  accent: '#88D982',          // ✅ bright green accent
+  text: '#FFFFFF',            
+  textSecondary: '#B0B0B0',   
+  border: '#444444',          
+  card: '#1E1E1E',            
+  accent: '#88D982',          
 };
 
 const ThemeContext = createContext();

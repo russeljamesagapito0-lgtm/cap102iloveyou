@@ -1,4 +1,3 @@
-// src/screens/ReactivateAccountScreen.js
 import React, { useState, useEffect } from 'react';
 import {
   View,
@@ -25,9 +24,6 @@ const daysBetween = (a, b) =>
 
 const ReactivateAccountScreen = ({ navigation, route }) => {
   const { themeColors, isDarkMode } = useTheme();
-
-  // These will come from the backend later. For now, allow the caller
-  // to pass them, and fall back to sensible demo values.
   const params = route?.params || {};
   const [deactivatedAt] = useState(
     params.deactivatedAt ? new Date(params.deactivatedAt) : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
@@ -42,8 +38,6 @@ const ReactivateAccountScreen = ({ navigation, route }) => {
 
   const daysLeft = daysBetween(new Date(), scheduledDeletionAt);
   const totalDays = daysBetween(deactivatedAt, scheduledDeletionAt);
-
-  // ---------- REACTIVATE (frontend stub) ----------
   const handleReactivate = async () => {
     if (reactivating) return;
     setReactivating(true);
@@ -52,20 +46,6 @@ const ReactivateAccountScreen = ({ navigation, route }) => {
     try {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-      // ============================================================
-      // TODO: replace this block with the real Supabase call once
-      // the backend is ready. Expected behavior:
-      //
-      //   const { data: { session } } = await supabase.auth.getSession();
-      //   if (!session?.user?.id) throw new Error('Not signed in');
-      //   const { error } = await supabase
-      //     .from('profiles')
-      //     .update({ deactivated_at: null, scheduled_deletion_at: null })
-      //     .eq('id', session.user.id);
-      //   if (error) throw error;
-      // ============================================================
-
-      // Simulate a short network round-trip so the demo feels real
       await new Promise((resolve) => setTimeout(resolve, 800));
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -81,8 +61,6 @@ const ReactivateAccountScreen = ({ navigation, route }) => {
       setReactivating(false);
     }
   };
-
-  // ---------- SIGN OUT ----------
   const handleSignOut = async () => {
     if (signingOut) return;
     setSigningOut(true);
@@ -111,7 +89,6 @@ const ReactivateAccountScreen = ({ navigation, route }) => {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Header icon */}
         <View style={styles.heroWrap}>
           <View
             style={[
@@ -122,8 +99,6 @@ const ReactivateAccountScreen = ({ navigation, route }) => {
             <Ionicons name="pause-circle-outline" size={72} color={themeColors.primary} />
           </View>
         </View>
-
-        {/* Title + body */}
         <Text style={[styles.title, { color: themeColors.text }]}>
           Account Deactivated
         </Text>
@@ -131,8 +106,6 @@ const ReactivateAccountScreen = ({ navigation, route }) => {
           Your RootCare account is currently deactivated. Your scans, notes, and profile
           information have been preserved and nothing has been deleted.
         </Text>
-
-        {/* Countdown card */}
         <View
           style={[
             styles.countdownCard,

@@ -1,6 +1,3 @@
-// src/utils/chatStore.js
-// Supabase-backed chat history for the RootCare Companion chatbot.
-// One row in `chats` per conversation; rows in `chat_messages` for each turn.
 import { supabase } from './supabaseClient';
 
 const TITLE_MAX = 40;

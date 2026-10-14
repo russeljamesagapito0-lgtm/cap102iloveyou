@@ -5,20 +5,15 @@ import { decode } from 'base64-arraybuffer';
 import { supabase } from './supabaseClient';
 import { DISEASE_INFO } from '../constants/diseaseInfo';
 
-// Constants for storage keys
 const QUEUE_KEY = 'rootcare_sync_queue';
 const CACHE_KEY = 'rootcare_scan_cache';
 
 export const SCAN_BUCKET = 'plant-scans';
-// Set to true ONLY if the `plant-scans` bucket is public in the Supabase dashboard.
-// When false, scans.image_url stays null and the admin panel creates signed URLs
-// from scans.image_path. (Admin handles both cases.)
 const SCAN_BUCKET_IS_PUBLIC = false;
 
 const PENDING_DIR = `${FileSystem.documentDirectory}pending-scans/`;
 const pendingImagePathFor = (scanId) => `${PENDING_DIR}${scanId}.jpg`;
 
-// Real UUID v4. Valid whether scans.id is `uuid` or `text`.
 export const generateScanId = () => {
   const c = globalThis?.crypto;
   if (c && typeof c.randomUUID === 'function') return c.randomUUID();
@@ -27,8 +22,6 @@ export const generateScanId = () => {
     return (ch === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
 };
-
-// ---------- queue storage (all writes serialized through one lock) ----------
 
 let queueLock = Promise.resolve();
 const withQueueLock = (fn) => {
@@ -64,7 +57,6 @@ const deleteLocalFile = async (path) => {
   }
 };
 
-// Remove exactly one queued item (matched by identity), without touching the rest.
 const removeMutation = (mutation) =>
   withQueueLock(async () => {
     const queue = await loadQueue();
@@ -97,14 +89,12 @@ const bumpAttempts = (mutation, errorMessage) =>
     }
   });
 
-// Enqueue mutation with dedup/collapse rules
 export const enqueueMutation = async (mutation) =>
   withQueueLock(async () => {
     const queue = await loadQueue();
     const { type, scanId } = mutation;
     const fresh = { ...mutation, createdAt: Date.now(), attempts: 0 };
 
-    // DELETE_FOREVER: drop every other pending mutation (and pending image) for this scan
     if (type === 'DELETE_FOREVER') {
       const dropped = queue.filter((item) => item.scanId === scanId);
       for (const item of dropped) {
@@ -116,8 +106,6 @@ export const enqueueMutation = async (mutation) =>
       return mutation;
     }
 
-    // CREATE_SCAN: one per scanId (pressing Save twice replaces, never duplicates)
-    // State mutations: replace existing same-type for same scanId
     const existingIndex = queue.findIndex(
       (item) => item.scanId === scanId && item.type === type
     );
@@ -128,7 +116,6 @@ export const enqueueMutation = async (mutation) =>
     return fresh;
   });
 
-// ---------- offline-first scan save ----------
 
 const toConfidence01 = (accuracyPercent) => {
   const n = typeof accuracyPercent === 'number' ? accuracyPercent : parseFloat(accuracyPercent);
@@ -136,14 +123,6 @@ const toConfidence01 = (accuracyPercent) => {
   return Math.max(0, Math.min(1, n / 100));
 };
 
-/**
- * Saves a scan LOCALLY first: copies the 384x384 JPEG into documentDirectory/pending-scans
- * and enqueues one CREATE_SCAN mutation (file path only, never base64).
- * Does not touch the network. Call flushQueue() afterwards if online.
- *
- * scan: { scanId?, preparedImageUri, userId, cropType, diseaseCode, diseaseName, diseaseType,
- *         severity, accuracy (0..100), description, treatment, prevention, symptoms, capturedAt }
- */
 export const savePendingScan = async (scan) => {
   const scanId = scan.scanId || generateScanId();
 
@@ -179,8 +158,6 @@ export const savePendingScan = async (scan) => {
   return { scanId, localImagePath };
 };
 
-// ---------- flush ----------
-
 const isNetworkError = (error) => {
   const msg = String(error?.message || error || '').toLowerCase();
   return (
@@ -198,7 +175,6 @@ const MAX_STATE_MUTATION_ATTEMPTS = 5;
 const runFlush = async () => {
   const result = { flushed: 0, failed: 0, remaining: 0, stoppedOnNetwork: false };
 
-  // getSession reads the locally stored session (no network round-trip)
   const { data: { session } } = await supabase.auth.getSession();
   const user = session?.user;
   const queue = await loadQueue();
@@ -207,10 +183,9 @@ const runFlush = async () => {
     return result;
   }
 
-  const blockedScanIds = new Set(); // a failed CREATE_SCAN blocks later mutations for that scan
+  const blockedScanIds = new Set(); 
 
   for (const mutation of queue) {
-    // Never upload one account's pending scan under another account
     if (mutation.type === 'CREATE_SCAN' && mutation.payload?.userId &&
         mutation.payload.userId !== user.id) {
       result.remaining++;
@@ -229,7 +204,7 @@ const runFlush = async () => {
       if (isNetworkError(error)) {
         result.stoppedOnNetwork = true;
         result.remaining += 1;
-        break; // keep everything from here on, try again on next trigger
+        break; 
       }
 
       if (__DEV__) console.log('[queue] mutation failed:', mutation?.type, error?.message);
@@ -252,8 +227,6 @@ const runFlush = async () => {
   return result;
 };
 
-// Only one flush at a time. If someone asks while one is running, run once more afterwards
-// so an item enqueued mid-flush is not left waiting for the next trigger.
 let flushPromise = null;
 let flushRequested = false;
 
@@ -281,7 +254,6 @@ export const flushQueue = () => {
   return flushPromise;
 };
 
-// Process individual mutation
 const processMutation = async (mutation, userId) => {
   const { type, scanId, payload } = mutation;
 
@@ -323,14 +295,9 @@ const processMutation = async (mutation, userId) => {
   }
 };
 
-// CREATE_SCAN: idempotent + retry-safe.
-//   1. upload (upsert:true)  2. upsert scans row on id  3. only then delete local file
-// (the caller removes the queue item after this resolves)
 const processCreateScan = async (mutation, userId) => {
   const { scanId, payload } = mutation;
 
-  // Items queued by the old flow (base64 in AsyncStorage, created at scan time) have no
-  // localImagePath. They were never "Saved" by the user, so they are discarded.
   if (!payload || !('localImagePath' in payload)) {
     if (__DEV__) console.log('[queue] discarding legacy CREATE_SCAN', scanId);
     return;
@@ -355,8 +322,7 @@ const processCreateScan = async (mutation, userId) => {
       if (uploadError) throw uploadError;
       hasImage = true;
     } else {
-      // File is gone (e.g. crash after a previous successful run, before the queue item
-      // was removed). If the row already has its image there is nothing left to do.
+
       const { data: existing, error: lookupError } = await supabase
         .from('scans')
         .select('id, image_path')
@@ -402,8 +368,6 @@ const processCreateScan = async (mutation, userId) => {
   await deleteLocalFile(payload.localImagePath);
 };
 
-// Rows from `scans` hold image_path = storage path (new) or a local file:// URI (old rows).
-// Returns copies whose image_path is something <Image source={{uri}}> can display.
 export const resolveScanImageUris = async (rows) => {
   const out = (rows || []).map((r) => ({ ...r }));
   const isStoragePath = (p) => p && !/^(file|content|https?):/i.test(p);
@@ -431,13 +395,10 @@ export const resolveScanImageUris = async (rows) => {
   return out;
 };
 
-// Removes storage object + any pending local file / queued mutations for these scans.
-// Best effort on storage so a DB delete that already succeeded is never reported as failed.
 export const removeScanAssets = async (scanIds, userIdOverride) => {
   const ids = (Array.isArray(scanIds) ? scanIds : [scanIds]).filter(Boolean);
   if (!ids.length) return;
 
-  // pending local files + queued CREATE_SCAN for these scans
   await withQueueLock(async () => {
     const queue = await loadQueue();
     const keep = [];
@@ -461,11 +422,10 @@ export const removeScanAssets = async (scanIds, userIdOverride) => {
 
   const { error } = await supabase.storage
     .from(SCAN_BUCKET)
-    .remove(ids.map((id) => `${userId}/${id}.jpg`)); // removing a missing object is a no-op
+    .remove(ids.map((id) => `${userId}/${id}.jpg`)); 
   if (error) throw error;
 };
 
-// DELETE_FOREVER: storage object, pending local file, plant_results, then the scans row
 const processDeleteForever = async (scanId, userId) => {
   const { data: scan, error: fetchError } = await supabase
     .from('scans')
@@ -475,7 +435,6 @@ const processDeleteForever = async (scanId, userId) => {
     .maybeSingle();
   if (fetchError) throw fetchError;
 
-  // Real storage paths look like `${userId}/${scanId}.jpg`; old rows hold local file:// URIs
   const paths = new Set([`${userId}/${scanId}.jpg`]);
   if (scan?.image_path && !/^(file|content|https?):/i.test(scan.image_path)) {
     paths.add(scan.image_path);
@@ -486,8 +445,6 @@ const processDeleteForever = async (scanId, userId) => {
 
   await deleteLocalFile(pendingImagePathFor(scanId));
 
-  // plant_results.scan_id has a FOREIGN KEY to scans(id) with NO cascade, so any result row
-  // must go first or the scans delete is rejected. (Best effort: there may be none.)
   const { error: resultsError } = await supabase.from('plant_results').delete().eq('scan_id', scanId);
   if (resultsError && __DEV__) console.log('[queue] plant_results cleanup skipped:', resultsError.message);
 
@@ -499,9 +456,7 @@ const processDeleteForever = async (scanId, userId) => {
   if (deleteError) throw deleteError;
 };
 
-// Fetch and cache scans with pending mutations overlay
 export const fetchAndCacheScans = async (userId) => {
-  // Fetch from Supabase with joined data
   const { data: scans, error } = await supabase
     .from('scans')
     .select(`
@@ -513,10 +468,7 @@ export const fetchAndCacheScans = async (userId) => {
 
   if (error) throw error;
 
-  // Load pending mutations
   const queue = await loadQueue();
-
-  // Build result with disease info and apply pending mutations
   const result = scans.map(scan => {
     const plantResult = scan.plant_results?.[0] || {};
     const diseaseInfo = DISEASE_INFO[plantResult.diagnosis_code] || null;
@@ -530,7 +482,6 @@ export const fetchAndCacheScans = async (userId) => {
       diseaseInfo
     };
 
-    // Apply pending mutations
     const pendingMutations = queue.filter(m => m.scanId === scan.id);
     pendingMutations.forEach(m => {
       switch (m.type) {
@@ -557,12 +508,10 @@ export const fetchAndCacheScans = async (userId) => {
     return enrichedScan;
   });
 
-  // Cache the result
   await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(result));
   return result;
 };
 
-// Get cached scans
 export const getCachedScans = async () => {
   try {
     const data = await AsyncStorage.getItem(CACHE_KEY);
@@ -573,7 +522,6 @@ export const getCachedScans = async () => {
   }
 };
 
-// Subscribe to connectivity changes
 export const subscribeToConnectivity = (onOnline) => {
   let wasConnected = false;
 

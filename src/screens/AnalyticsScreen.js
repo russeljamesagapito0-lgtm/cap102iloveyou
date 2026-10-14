@@ -43,10 +43,6 @@ if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental
   UIManager.setLayoutAnimationEnabledExperimental(true);
 }
 
-/* ------------------------------------------------------------------ */
-/* Tokens                                                              */
-/* ------------------------------------------------------------------ */
-
 const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 };
 const rounded = { sm: 8, md: 12, lg: 18, full: 9999 };
 
@@ -117,10 +113,6 @@ const normalizeCode = (raw) => {
   if (!k) return null;
   return CODE_ALIASES[k] || k;
 };
-
-/* ------------------------------------------------------------------ */
-/* Small components                                                    */
-/* ------------------------------------------------------------------ */
 
 const HealthBar = ({ healthy, diseases, total, trackColor }) => {
   if (!total) return null;
@@ -262,10 +254,6 @@ const Checklist = ({ items, themeColors }) => {
   );
 };
 
-/* ------------------------------------------------------------------ */
-/* Scans modal                                                         */
-/* ------------------------------------------------------------------ */
-
 const ScanThumb = ({ scan, style }) => {
   if (scan.image) {
     return <Image source={{ uri: scan.image }} style={style} resizeMode="cover" />;
@@ -344,10 +332,6 @@ const DiseaseScansModal = ({ visible, item, scans, onClose, onOpenScan, themeCol
     </Modal>
   );
 };
-
-/* ------------------------------------------------------------------ */
-/* Disease card                                                        */
-/* ------------------------------------------------------------------ */
 
 const DiseaseCard = ({
   item,
@@ -494,9 +478,6 @@ const DiseaseCard = ({
   );
 };
 
-/* ------------------------------------------------------------------ */
-/* Screen                                                              */
-/* ------------------------------------------------------------------ */
 
 const AnalyticsScreen = () => {
   const { themeColors, isDarkMode } = useTheme();
@@ -678,7 +659,6 @@ const AnalyticsScreen = () => {
     });
   };
 
-  // Builds the report HTML once, shared by share and print flows.
   const buildPdfHtml = useCallback(async () => {
     let user = null;
     try {
@@ -746,7 +726,6 @@ const AnalyticsScreen = () => {
       await Print.printAsync({ html });
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (err) {
-      // Cancelling the native print sheet throws on some platforms — ignore that.
       const msg = err?.message || '';
       if (!/cancel/i.test(msg)) {
         console.warn('Print failed:', msg);
@@ -1089,10 +1068,6 @@ const AnalyticsScreen = () => {
     </SafeAreaView>
   );
 };
-
-/* ------------------------------------------------------------------ */
-/* Styles                                                              */
-/* ------------------------------------------------------------------ */
 
 const styles = StyleSheet.create({
   container: {

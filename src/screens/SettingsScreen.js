@@ -85,7 +85,6 @@ const SettingsScreen = ({ navigation }) => {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 
-  // ---------- DEACTIVATION (frontend only for now) ----------
   const [deactivateModalVisible, setDeactivateModalVisible] = useState(false);
   const [deactivating, setDeactivating] = useState(false);
   const [deactivatedPreview, setDeactivatedPreview] = useState(false);
@@ -172,7 +171,6 @@ const SettingsScreen = ({ navigation }) => {
     setGuestGateVisible(false);
   };
 
-  // ---------- AVATAR UPLOAD ----------
   const uploadAvatar = async (uri, userId) => {
     try {
       setUploadingAvatar(true);
@@ -366,7 +364,6 @@ const SettingsScreen = ({ navigation }) => {
     }
   };
 
-  // ---------- DEACTIVATE ACCOUNT (frontend stub) ----------
   const openDeactivateModal = () => {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     setDeactivateModalVisible(true);
@@ -380,19 +377,6 @@ const SettingsScreen = ({ navigation }) => {
   const handleDeactivateAccount = async () => {
     setDeactivating(true);
     try {
-      // ============================================================
-      // TODO: replace this block with the real Supabase call once
-      // the backend is ready. Expected backend behavior:
-      //
-      //   const { data: { session } } = await supabase.auth.getSession();
-      //   const now = new Date();
-      //   const deletionAt = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
-      //   await supabase.from('profiles').update({
-      //     deactivated_at: now.toISOString(),
-      //     scheduled_deletion_at: deletionAt.toISOString(),
-      //   }).eq('id', session.user.id);
-      //   await supabase.auth.signOut();
-      // ============================================================
 
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
       setDeactivateModalVisible(false);
@@ -464,9 +448,6 @@ const SettingsScreen = ({ navigation }) => {
     });
   };
 
-  // ============================================================
-  // DEACTIVATED PREVIEW SCREEN
-  // ============================================================
   if (deactivatedPreview) {
     return (
       <SafeAreaView style={[styles.container, { backgroundColor: themeColors.background }]} edges={['top']}>

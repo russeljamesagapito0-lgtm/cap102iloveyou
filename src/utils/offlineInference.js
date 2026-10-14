@@ -1,11 +1,9 @@
-// utils/offlineInference.js
 import { Asset } from 'expo-asset';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Skia, ColorType, AlphaType } from '@shopify/react-native-skia';
 import { loadTensorflowModel } from 'react-native-fast-tflite';
 import { prepareScanImage } from './scanImage';
 
-// ---- Config ----
 const IMAGE_SIZE = 384;
 const CONFIDENCE_THRESHOLD = 0.65;
 const GREEN_RATIO_THRESHOLD = 0.15;
@@ -36,7 +34,6 @@ const CLASS_NAMES = [
   'Healthy',
 ];
 
-// ---- Model file ----
 const MODEL_FILENAME = 'rootcare_cassava_convnext_384.tflite';
 const OLD_MODEL_FILENAME = 'rootcare_cassava_model_resnet50v2.tflite';
 const LOCAL_MODEL_PATH = FileSystem.documentDirectory + MODEL_FILENAME;
@@ -44,14 +41,12 @@ const LOCAL_MODEL_PATH = FileSystem.documentDirectory + MODEL_FILENAME;
 let _model = null;
 let _loading = null;
 
-// ---- Load / cache the TFLite model ----
 export const loadOfflineModel = async () => {
   if (_model) return _model;
   if (_loading) return _loading;
 
   _loading = (async () => {
     try {
-      // Remove the orphaned old model on phones that already had the app
       FileSystem.deleteAsync(FileSystem.documentDirectory + OLD_MODEL_FILENAME, {
         idempotent: true,
       }).catch(() => {});
@@ -89,7 +84,6 @@ export const loadOfflineModel = async () => {
   return _loading;
 };
 
-// ---- Native image decode via Skia ----
 const decodeImageNative = async (uri) => {
   const data = await Skia.Data.fromURI(uri);
   const image = Skia.Image.MakeImageFromEncoded(data);
@@ -112,7 +106,6 @@ const decodeImageNative = async (uri) => {
   return { data: pixels, width, height };
 };
 
-// ---- Input tensor: RGBA → RGB float (raw 0-255, model does its own preprocessing) ----
 const buildInputTensor = (rgba) => {
   const out = new Float32Array(IMAGE_SIZE * IMAGE_SIZE * 3);
   for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
@@ -123,7 +116,6 @@ const buildInputTensor = (rgba) => {
   return out;
 };
 
-// ---- Quality heuristics ----
 const computeGreenRatio = (rgba) => {
   let green = 0;
   const total = rgba.length / 4;
@@ -185,7 +177,6 @@ const computeBrightnessContrast = (rgba, w, h) => {
   return { brightness: mean, contrast: stddev };
 };
 
-// ---- Normalize raw model output into a plain array ----
 const normalizeOutput = (raw) => {
   if (!raw) return [];
   if (raw instanceof Float32Array) return Array.from(raw);
@@ -198,12 +189,9 @@ const normalizeOutput = (raw) => {
   }
 };
 
-// ---- Main inference entry point ----
 export const runOfflineInference = async (imageUri) => {
   const model = await loadOfflineModel();
 
-  // Same operation as before (resize only, JPEG q0.9), now via the shared helper
-  // so the exact bitmap the model sees can also be saved with the scan.
   const manipulated = await prepareScanImage(imageUri, { centerCrop: false });
 
   const { data: rgba, width, height } = await decodeImageNative(manipulated.uri);
@@ -294,7 +282,7 @@ export const runOfflineInference = async (imageUri) => {
     confidence: parseFloat((confidence * 100).toFixed(2)),
     detection_metrics: detectionMetrics,
     allProbabilities,
-    preparedImageUri: manipulated.uri, // the exact 384x384 JPEG the model received
+    preparedImageUri: manipulated.uri,
     _offline: true,
   };
 };

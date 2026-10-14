@@ -17,7 +17,6 @@ const protectedRoutes = [
   { path: '/reports', element: <Reports /> },
   { path: '/models', element: <Models /> },
   { path: '/maintenance', element: <Maintenance /> },
-  // Audit Log now lives inside Maintenance; keep old links working.
   { path: '/audit', element: <Navigate to="/maintenance?tab=audit" replace /> },
 ];
 

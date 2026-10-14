@@ -42,9 +42,7 @@ export const filterBySeason = (scans, season) => {
   return scans.filter((s) => inRange(new Date(s.createdAt), season.start, season.end));
 };
 
-// ---------------------------------------------------------------------------
-// Disease code normalization
-// ---------------------------------------------------------------------------
+
 const CODE_ALIASES = {
   cbb: 'bacterial_blight',
   cbsd: 'cassava_brown_streak',
@@ -90,9 +88,6 @@ const normalizeScan = (scan) => {
   return { ...scan, code };
 };
 
-// ---------------------------------------------------------------------------
-// Weighted disease priority
-// ---------------------------------------------------------------------------
 const SEVERITY_WEIGHT = { High: 3, Medium: 2, Low: 1, None: 0.5, Unknown: 1 };
 const TYPE_MULTIPLIER = { Viral: 1.4, Bacterial: 1.2, Pest: 1.0, Fungal: 0.8 };
 
@@ -151,10 +146,6 @@ export const buildSeasonReport = (rawScans, season) => {
     topProblem,
   };
 };
-
-// ---------------------------------------------------------------------------
-// Rolling 30-day comparison
-// ---------------------------------------------------------------------------
 const MS_DAY = 24 * 60 * 60 * 1000;
 
 const scansInWindow = (scans, fromDays, toDays) => {
@@ -176,14 +167,6 @@ const windowCounts = (scans, fromDays, toDays) => {
   return { total: inWindow.length, diseased: diseased.length };
 };
 
-// ---------------------------------------------------------------------------
-// Per-disease rolling trends
-//
-// For each disease, compare its count in the last 30 days to its count in
-// the 30 days before that. Returns diseases sorted by the magnitude of
-// change (biggest movers first). Only returns diseases with a nonzero
-// count in at least one window.
-// ---------------------------------------------------------------------------
 export const buildDiseaseTrends = (rawScans) => {
   const current = scansInWindow(rawScans, 30, 0);
   const previous = scansInWindow(rawScans, 60, 30);
@@ -224,7 +207,6 @@ export const buildDiseaseTrends = (rawScans) => {
       now,
       before,
       delta,
-      // Absolute magnitude for sorting: a jump from 1 → 4 is bigger than 5 → 6.
       magnitude: Math.abs(delta),
     });
   }
@@ -232,7 +214,6 @@ export const buildDiseaseTrends = (rawScans) => {
   return trends.sort((a, b) => b.magnitude - a.magnitude);
 };
 
-// Formats a single trend into a short human sentence.
 const describeTrend = (trend) => {
   const { name, now, before, delta } = trend;
 
@@ -280,8 +261,6 @@ export const buildRollingComparison = (rawScans) => {
     text = `Disease rate steady — ${current.diseased} of ${current.total} scans in the last 30 days (was ${previous.diseased} of ${previous.total}).`;
   }
 
-  // Per-disease driver: the disease with the biggest change that also
-  // agrees with the overall direction (or is the most notable mover).
   const allTrends = buildDiseaseTrends(rawScans);
   let driver = null;
   let driverText = null;
@@ -311,9 +290,6 @@ export const buildRollingComparison = (rawScans) => {
   };
 };
 
-// ---------------------------------------------------------------------------
-// Action checklist
-// ---------------------------------------------------------------------------
 const ICON_FOR_ACTION = {
   urgent: 'alert-circle-outline',
   protect: 'shield-checkmark-outline',
@@ -393,9 +369,6 @@ export const buildActionChecklist = (report) => {
 
 export const ACTION_META = { ICON_FOR_ACTION, ACTION_LABEL };
 
-// ---------------------------------------------------------------------------
-// Headline advice + comparisons
-// ---------------------------------------------------------------------------
 export const buildComparison = (currentReport, previousReport) => {
   if (!currentReport || !previousReport) return null;
   const curr = currentReport.diseasedCount;

@@ -143,9 +143,6 @@ const ScannerScreen = ({ navigation, route }) => {
       return false;
     }
   };
-
-  // Online path: center-crop + 384x384 JPEG q0.9 (shared helper). Returns the base64
-  // sent to the server AND the file uri of that exact bitmap, so Save can keep it.
   const preprocessImage = async (imageUri) => {
     const prepared = await prepareScanImage(imageUri, {
       centerCrop: true,

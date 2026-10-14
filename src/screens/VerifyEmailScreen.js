@@ -1,6 +1,3 @@
-// screens/VerifyEmailScreen.js
-// Shown right after sign-up (and when an unverified user tries to log in).
-// Flow: user types the 6-digit code emailed via Brevo SMTP -> verifyOtp -> create profile -> MainTabs
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity, StyleSheet, Platform,
@@ -19,8 +16,8 @@ const CODE_LENGTH = 6;
 const VerifyEmailScreen = ({ navigation, route }) => {
   const { themeColors } = useTheme();
   const email = (route?.params?.email || '').trim();
-  const pendingProfile = route?.params?.profile || null; // fields collected on RegisterScreen
-  const autoResend = !!route?.params?.autoResend;        // true when coming from Login
+  const pendingProfile = route?.params?.profile || null; 
+  const autoResend = !!route?.params?.autoResend;        
 
   const [code, setCode] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -64,7 +61,6 @@ const VerifyEmailScreen = ({ navigation, route }) => {
     }
   }, [email]);
 
-  // Coming from Login with an unverified account: send a fresh code once.
   useEffect(() => {
     if (autoResend && email && !didAutoResend.current) {
       didAutoResend.current = true;
@@ -94,7 +90,6 @@ const VerifyEmailScreen = ({ navigation, route }) => {
         return;
       }
 
-      // Email is now confirmed and a session exists, so RLS lets us write the profile.
       const user = data?.user;
       const profile = pendingProfile || user?.user_metadata?.profile;
       if (user && profile) {
