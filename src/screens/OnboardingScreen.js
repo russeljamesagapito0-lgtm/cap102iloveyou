@@ -45,7 +45,7 @@ const OnboardingScreen = ({ navigation }) => {
       id: '4',
       title: 'Ask RootCare Companion',
       subtitle: 'Get instant answers about cassava care from your AI farming assistant.',
-      image: require('../assets/ChatbotSlide.png'),
+      image: require('../assets/LastSlide.png'),
       description: 'From disease treatment to planting advice — ask anytime',
       icon: 'chatbubble-ellipses-outline',
     },
