@@ -5,7 +5,6 @@ import Dashboard from './pages/Dashboard';
 import Users from './pages/Users';
 import Scans from './pages/Scans';
 import Maintenance from './pages/Maintenance';
-import Models from './pages/Models';
 import Analytics from './pages/Analytics';
 import Reports from './pages/Reports';
 
@@ -15,7 +14,6 @@ const protectedRoutes = [
   { path: '/scans', element: <Scans /> },
   { path: '/analytics', element: <Analytics /> },
   { path: '/reports', element: <Reports /> },
-  { path: '/models', element: <Models /> },
   { path: '/maintenance', element: <Maintenance /> },
   { path: '/audit', element: <Navigate to="/maintenance?tab=audit" replace /> },
 ];

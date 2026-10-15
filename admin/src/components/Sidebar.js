@@ -18,7 +18,6 @@ const SECTIONS = [
   {
     title: 'Utilities',
     links: [
-      { to: '/models',      label: 'Models',      icon: 'models' },
       { to: '/maintenance', label: 'Maintenance', icon: 'maintenance' },
     ],
   },
