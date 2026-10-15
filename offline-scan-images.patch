@@ -1,0 +1,1561 @@
+From 8316f52a9901ffbc874d9dda80dd45b940d10702 Mon Sep 17 00:00:00 2001
+From: claude <c@x>
+Date: Mon, 12 Oct 2026 21:32:02 +0000
+Subject: [PATCH] Offline-first scan image saving (384px JPEG, local queue,
+ idempotent upload)
+
+---
+ App.js                                  |  16 +
+ admin/src/components/ScanImage.js       |  40 ++
+ admin/src/pages/Scans.js                |  14 +-
+ admin/src/pages/Users.js                |  18 +-
+ admin/src/styles/components.css         |  13 +-
+ src/screens/HomeScreen.js               |   5 +-
+ src/screens/ResultScreen.js             |  78 ++--
+ src/screens/ScanHistory.js              |   8 +-
+ src/screens/ScannerScreen.js            |  93 +----
+ src/utils/__tests__/syncManager.test.js | 123 +++++-
+ src/utils/offlineInference.js           |  11 +-
+ src/utils/scanImage.js                  |  37 ++
+ src/utils/syncManager.js                | 520 ++++++++++++++++++------
+ supabase/sql/offline_scan_images.sql    |  57 +++
+ 14 files changed, 760 insertions(+), 273 deletions(-)
+ create mode 100644 admin/src/components/ScanImage.js
+ create mode 100644 src/utils/scanImage.js
+ create mode 100644 supabase/sql/offline_scan_images.sql
+
+diff --git a/App.js b/App.js
+index d7dbafd..b584129 100644
+--- a/App.js
++++ b/App.js
+@@ -108,6 +108,22 @@ const AppNavigator = () => {
+     return () => unsub();
+   }, []);
+ 
++  // Flush pending saves on app start / login and whenever the app returns to the foreground.
++  // (Reconnect is handled by the NetInfo listener above. flushQueue is single-flight, so
++  // overlapping triggers are safe.)
++  useEffect(() => {
++    if (!isAuthenticated) return;
++
++    const flush = () =>
++      flushQueue().catch((e) => console.warn('Queue flush failed:', e?.message));
++
++    flush();
++    const sub = AppState.addEventListener('change', (st) => {
++      if (st === 'active') flush();
++    });
++    return () => sub.remove();
++  }, [isAuthenticated]);
++
+   if (isLoading || themeLoading || !maintenanceChecked) {
+     return (
+       <View
+diff --git a/admin/src/components/ScanImage.js b/admin/src/components/ScanImage.js
+new file mode 100644
+index 0000000..d9db990
+--- /dev/null
++++ b/admin/src/components/ScanImage.js
+@@ -0,0 +1,40 @@
++import { useEffect, useState } from 'react';
++import { supabase } from '../lib/supabase';
++
++const BUCKET = 'plant-scans';
++const isStoragePath = (p) => !!p && !/^(file|content|https?):/i.test(p);
++
++// Works whether the bucket is public or private: if the scan has a storage path we ask
++// for a signed URL (needs the admin storage SELECT policy); otherwise we fall back to
++// image_url. Shows `fallback` (placeholder) when there is no image or it fails to load.
++export default function ScanImage({ scan, fallback = null }) {
++  const [src, setSrc] = useState(null);
++  const [failed, setFailed] = useState(false);
++
++  useEffect(() => {
++    let cancelled = false;
++    setFailed(false);
++    setSrc(null);
++
++    const path = scan?.image_path;
++    if (isStoragePath(path)) {
++      supabase.storage
++        .from(BUCKET)
++        .createSignedUrl(path, 3600)
++        .then(({ data, error }) => {
++          if (cancelled) return;
++          if (!error && data?.signedUrl) setSrc(data.signedUrl);
++          else if (scan?.image_url) setSrc(scan.image_url);
++          else setFailed(true);
++        });
++    } else if (scan?.image_url) {
++      setSrc(scan.image_url);
++    } else {
++      setFailed(true);
++    }
++    return () => { cancelled = true; };
++  }, [scan?.image_path, scan?.image_url]);
++
++  if (!src || failed) return <span className="scan-img-placeholder">{fallback ?? 'No image'}</span>;
++  return <img src={src} alt="" className="scan-img" loading="lazy" onError={() => setFailed(true)} />;
++}
+diff --git a/admin/src/pages/Scans.js b/admin/src/pages/Scans.js
+index 80e89cf..3f62f7c 100644
+--- a/admin/src/pages/Scans.js
++++ b/admin/src/pages/Scans.js
+@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from 'react';
+ import { useSearchParams } from 'react-router-dom';
+ import Badge from '../components/Badge';
+ import Modal from '../components/Modal';
++import ScanImage from '../components/ScanImage';
+ import { useConfirm } from '../components/ConfirmDialog';
+ import { useToast } from '../context/ToastContext';
+ import { downloadCsv } from '../lib/csv';
+@@ -41,6 +42,7 @@ const buildScanObject = (s, names) => ({
+   date: fmtDate(s.created_at),
+   region: s.region || '-',
+   image_url: s.image_url,
++  image_path: s.image_path,
+   flagged: s.flagged,
+   corrected: s.corrected,
+ });
+@@ -352,11 +354,7 @@ export default function Scans() {
+           {filtered.map((s) => (
+             <div key={s.id} className="scan-card">
+               <div className="scan-thumb">
+-                {s.image_url ? (
+-                  <img src={s.image_url} alt="" className="scan-img" />
+-                ) : (
+-                  s.disease
+-                )}
++                <ScanImage scan={s} fallback={s.disease} />
+               </div>
+               <div className="scan-body">
+                 <div className="scan-title-row">
+@@ -400,11 +398,7 @@ export default function Scans() {
+         {selected && (
+           <div className="stack-md">
+             <div className="scan-thumb scan-thumb-lg">
+-              {selected.image_url ? (
+-                <img src={selected.image_url} alt="" className="scan-img" />
+-              ) : (
+-                selected.disease
+-              )}
++              <ScanImage scan={selected} fallback={selected.disease} />
+             </div>
+ 
+             <div>
+diff --git a/admin/src/pages/Users.js b/admin/src/pages/Users.js
+index 3b46eda..db8f945 100644
+--- a/admin/src/pages/Users.js
++++ b/admin/src/pages/Users.js
+@@ -1,6 +1,7 @@
+ import { useState, useEffect, useMemo } from 'react';
+ import Modal from '../components/Modal';
+ import Badge from '../components/Badge';
++import ScanImage from '../components/ScanImage';
+ import { useConfirm } from '../components/ConfirmDialog';
+ import { useToast } from '../context/ToastContext';
+ import { downloadCsv } from '../lib/csv';
+@@ -36,6 +37,7 @@ const buildScan = (s, names) => ({
+   date: fmtDate(s.created_at),
+   region: s.region || '-',
+   image_url: s.image_url,
++  image_path: s.image_path,
+   flagged: s.flagged,
+   corrected: s.corrected,
+ });
+@@ -613,15 +615,7 @@ export default function Users() {
+                     {visibleScans.map((s) => (
+                       <div key={s.id} className="scan-mini-card">
+                         <div className="scan-mini-thumb">
+-                          {s.image_url ? (
+-                            <img
+-                              src={s.image_url}
+-                              alt=""
+-                              className="scan-img"
+-                            />
+-                          ) : (
+-                            s.disease
+-                          )}
++                          <ScanImage scan={s} fallback={s.disease} />
+                         </div>
+                         <div className="scan-mini-body">
+                           <div className="scan-title-row">
+@@ -678,11 +672,7 @@ export default function Users() {
+         {reviewTarget && (
+           <div className="stack-md">
+             <div className="scan-thumb scan-thumb-lg">
+-              {reviewTarget.image_url ? (
+-                <img src={reviewTarget.image_url} alt="" className="scan-img" />
+-              ) : (
+-                reviewTarget.disease
+-              )}
++              <ScanImage scan={reviewTarget} fallback={reviewTarget.disease} />
+             </div>
+ 
+             <div>
+diff --git a/admin/src/styles/components.css b/admin/src/styles/components.css
+index bf8f4dc..0ca0e1a 100644
+--- a/admin/src/styles/components.css
++++ b/admin/src/styles/components.css
+@@ -1156,4 +1156,15 @@ select.input { cursor: pointer; }
+ 
+ .scan-mini-footer .link-btn {
+   font-size: 11px;
+-}
+\ No newline at end of file
++}
++.scan-img-placeholder {
++  display: flex;
++  align-items: center;
++  justify-content: center;
++  width: 100%;
++  height: 100%;
++  padding: 8px;
++  text-align: center;
++  font-size: 12px;
++  opacity: 0.7;
++}
+diff --git a/src/screens/HomeScreen.js b/src/screens/HomeScreen.js
+index 6faad2a..77838c1 100644
+--- a/src/screens/HomeScreen.js
++++ b/src/screens/HomeScreen.js
+@@ -11,6 +11,7 @@ import * as Location from 'expo-location';
+ import AsyncStorage from '@react-native-async-storage/async-storage';
+ import { useFocusEffect } from '@react-navigation/native';
+ import { supabase } from '../utils/supabaseClient';
++import { resolveScanImageUris } from '../utils/syncManager';
+ import { useTheme } from '../context/ThemeContext';
+ import { markAllNotificationsRead } from '../utils/notifications';
+ 
+@@ -835,7 +836,7 @@ const HomeScreen = ({ navigation }) => {
+         console.warn('Last scan fetch failed:', lastError.message);
+         setLastScan(null);
+       } else {
+-        setLastScan(lastData?.[0] || null);
++        setLastScan((await resolveScanImageUris(lastData || []))[0] || null);
+       }
+ 
+       const { data: savedData, error: savedError } = await supabase
+@@ -852,7 +853,7 @@ const HomeScreen = ({ navigation }) => {
+         console.warn('Saved scans fetch failed:', savedError.message);
+         setSavedScans([]);
+       } else {
+-        setSavedScans(savedData || []);
++        setSavedScans(await resolveScanImageUris(savedData || []));
+       }
+     } catch (err) {
+       console.warn('Recent activity error:', err.message);
+diff --git a/src/screens/ResultScreen.js b/src/screens/ResultScreen.js
+index b471a09..e908290 100644
+--- a/src/screens/ResultScreen.js
++++ b/src/screens/ResultScreen.js
+@@ -5,7 +5,10 @@ import { Ionicons } from '@expo/vector-icons';
+ import * as Haptics from 'expo-haptics';
+ import { DISEASE_INFO } from '../constants/diseaseInfo';
+ import { useTheme } from '../context/ThemeContext';
++import NetInfo from '@react-native-community/netinfo';
++import Toast from 'react-native-toast-message';
+ import { supabase } from '../utils/supabaseClient';
++import { savePendingScan, flushQueue, generateScanId } from '../utils/syncManager';
+ 
+ const { width, height } = Dimensions.get('window');
+ 
+@@ -30,9 +33,12 @@ const findTabNavigator = (navigation) => {
+ 
+ const ResultScreen = ({ route, navigation }) => {
+   const { themeColors, isDarkMode } = useTheme();
+-  const { imageUri, scanDate, diseaseKey, diseaseLabel, confidence } = route.params || {};
++  const { imageUri, preparedImageUri, scanDate, diseaseKey, diseaseLabel, confidence } = route.params || {};
+   const [isSaved, setIsSaved] = useState(false);
+   const [isSaving, setIsSaving] = useState(false);
++  const [savedOffline, setSavedOffline] = useState(false);
++  const savingRef = useRef(false); // synchronous guard against double taps
++  const scanIdRef = useRef(null);  // one scan id per result screen, so retries never create a second row
+   const [confirmVisible, setConfirmVisible] = useState(false);
+   const [savedModalVisible, setSavedModalVisible] = useState(false);
+ 
+@@ -69,8 +75,11 @@ const ResultScreen = ({ route, navigation }) => {
+   const formattedDate = scannedAt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+   const formattedTime = scannedAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+ 
++  // Local-first save: copy the 384px JPEG to pending-scans + enqueue ONE mutation, tell the
++  // user immediately, then (if online) kick off the upload. flushQueue() owns all Supabase writes.
+   const saveResult = async () => {
+-    if (isSaving) return;
++    if (savingRef.current || isSavedRef.current) return isSavedRef.current;
++    savingRef.current = true;
+ 
+     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+     setIsSaving(true);
+@@ -80,46 +89,60 @@ const ResultScreen = ({ route, navigation }) => {
+ 
+       if (!session?.user?.id) {
+         setIsSaved(true);
+-        return;
++        return true;
+       }
+ 
+       const diseaseType = diseaseData.type || diseaseData.diseaseType || 'Unknown';
+-      const diseaseSeverity = diseaseData.severity || null;
+       const diseaseAccuracy = typeof confidence === 'number'
+         ? confidence
+         : (confidence ? parseFloat(confidence) : null);
+ 
+-      const payload = {
+-        user_id: session.user.id,
+-        crop_type: diseaseData.crop || 'Cassava',
+-        image_path: imageUri || null,
+-        captured_at: scannedAt.toISOString(),
+-        is_saved: true,
+-        is_archived: false,
+-        is_deleted: false,
+-        disease_name: diseaseData.name,
+-        disease_type: diseaseType,
+-        severity: diseaseSeverity,
+-        accuracy: diseaseAccuracy,
++      if (!scanIdRef.current) scanIdRef.current = generateScanId();
++
++      await savePendingScan({
++        scanId: scanIdRef.current,
++        userId: session.user.id,
++        preparedImageUri,
++        cropType: diseaseData.crop || 'Cassava',
++        capturedAt: scannedAt.toISOString(),
++        diseaseCode: diseaseKey || null,
++        diseaseName: diseaseData.name,
++        diseaseType,
++        severity: diseaseData.severity || null,
++        accuracy: Number.isFinite(diseaseAccuracy) ? diseaseAccuracy : null, // 0..100
+         description: diseaseData.description || null,
+         treatment: diseaseData.treatment || null,
+         prevention: diseaseData.prevention || null,
+         symptoms: diseaseData.symptoms || null,
+-      };
++      });
+ 
+-      const { error } = await supabase.from('scans').insert(payload);
++      let online = false;
++      try {
++        const net = await NetInfo.fetch();
++        online = !!net.isConnected && net.isInternetReachable !== false;
++      } catch (_) {}
+ 
+-      if (error) {
+-        console.warn('Failed to save scan:', error.message);
+-        Alert.alert('Save failed', error.message);
+-        return;
++      if (isMountedRef.current) {
++        setIsSaved(true);
++        setSavedOffline(!online);
+       }
+-
+-      if (isMountedRef.current) setIsSaved(true);
++      Toast.show({
++        type: 'success',
++        text1: 'Saved',
++        text2: online ? 'Scan saved.' : "Saved. Will upload when you're online",
++        visibilityTime: 2500,
++      });
++
++      if (online) {
++        flushQueue().catch((e) => console.warn('Queue flush failed:', e?.message));
++      }
++      return true;
+     } catch (err) {
+       console.warn('Save error:', err);
+-      Alert.alert('Save failed', err.message || 'Unknown error');
++      Alert.alert('Save failed', err?.message || 'Unknown error');
++      return false;
+     } finally {
++      savingRef.current = false;
+       if (isMountedRef.current) setIsSaving(false);
+     }
+   };
+@@ -147,7 +170,8 @@ const ResultScreen = ({ route, navigation }) => {
+   const navigateToScanAgain = () => showModal(goToScanner);
+ 
+   const handleSaveAndContinue = async () => {
+-    await saveResult();
++    const ok = await saveResult();
++    if (!ok) return; // keep the confirm dialog open so the user can retry
+     setConfirmVisible(false);
+     const action = pendingActionRef.current;
+     pendingActionRef.current = null;
+@@ -276,7 +300,7 @@ const ResultScreen = ({ route, navigation }) => {
+               <Ionicons name="checkmark" size={32} color={themeColors['on-primary']} />
+             </View>
+             <Text style={[styles.savedModalTitle, { color: themeColors.text }]}>Saved!</Text>
+-            <Text style={[styles.savedModalBody, { color: themeColors.textSecondary }]}>Scan result has been saved to history.</Text>
++            <Text style={[styles.savedModalBody, { color: themeColors.textSecondary }]}>{savedOffline ? "Saved. Will upload when you're online." : 'Scan result has been saved to history.'}</Text>
+           </View>
+         </View>
+       </Modal>
+diff --git a/src/screens/ScanHistory.js b/src/screens/ScanHistory.js
+index 7818b96..66db2c5 100644
+--- a/src/screens/ScanHistory.js
++++ b/src/screens/ScanHistory.js
+@@ -11,6 +11,7 @@ import * as Haptics from 'expo-haptics';
+ import { useFocusEffect } from '@react-navigation/native';
+ import { useTheme } from '../context/ThemeContext';
+ import { supabase } from '../utils/supabaseClient';
++import { flushQueue, removeScanAssets, resolveScanImageUris } from '../utils/syncManager';
+ 
+ const { width } = Dimensions.get('window');
+ 
+@@ -134,6 +135,9 @@ const HistoryScreen = ({ navigation, route }) => {
+         return;
+       }
+ 
++      // let any just-saved scan finish uploading so it shows up in the list
++      try { await flushQueue(); } catch (_) {}
++
+       const { data, error } = await supabase
+         .from('scans')
+         .select('*')
+@@ -144,7 +148,7 @@ const HistoryScreen = ({ navigation, route }) => {
+         console.warn('Load scans failed:', error.message);
+         setHistoryData([]);
+       } else {
+-        setHistoryData((data || []).map(mapRowToItem));
++        setHistoryData((await resolveScanImageUris(data || [])).map(mapRowToItem));
+       }
+     } catch (err) {
+       console.warn('Load scans error:', err.message);
+@@ -308,6 +312,7 @@ const HistoryScreen = ({ navigation, route }) => {
+           setHistoryData(prev);
+           return;
+         }
++        removeScanAssets([id]).catch((e) => console.warn('Storage cleanup failed:', e?.message));
+         showSuccess('Deleted!', 'This scan has been permanently deleted.');
+       },
+     });
+@@ -404,6 +409,7 @@ const HistoryScreen = ({ navigation, route }) => {
+           setHistoryData(prev);
+           return;
+         }
++        removeScanAssets(ids).catch((e) => console.warn('Storage cleanup failed:', e?.message));
+         showSuccess('Deleted!', 'Selected scans have been permanently deleted.');
+       },
+     });
+diff --git a/src/screens/ScannerScreen.js b/src/screens/ScannerScreen.js
+index 8b65806..dda1fe9 100644
+--- a/src/screens/ScannerScreen.js
++++ b/src/screens/ScannerScreen.js
+@@ -4,15 +4,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
+ import { Ionicons } from '@expo/vector-icons';
+ import { CameraView, useCameraPermissions } from 'expo-camera';
+ import * as ImagePicker from 'expo-image-picker';
+-import * as ImageManipulator from 'expo-image-manipulator';
+ import * as Haptics from 'expo-haptics';
+ import Toast from 'react-native-toast-message';
+ import { useFocusEffect } from '@react-navigation/native';
+ import NetInfo from '@react-native-community/netinfo';
+ import { runOfflineInference, loadOfflineModel } from '../utils/offlineInference';
+-import { enqueueMutation, generateScanId, flushQueue } from '../utils/syncManager';
++import { prepareScanImage } from '../utils/scanImage';
+ import { DISEASE_INFO } from '../constants/diseaseInfo';
+-import * as FileSystem from 'expo-file-system/legacy';
+ import { analyzeCropImage } from '../utils/aiClient';
+ 
+ const { width, height } = Dimensions.get('window');
+@@ -87,20 +85,8 @@ const ScannerScreen = ({ navigation, route }) => {
+       .then(() => setOfflineReady(true))
+       .catch((err) => console.warn('Offline model unavailable:', err?.message));
+ 
+-    let wasConnected = true;
+     const unsub = NetInfo.addEventListener((state) => {
+-      const connected = !!state.isConnected && state.isInternetReachable !== false;
+-      setIsOnline(connected);
+-
+-      if (connected && !wasConnected) {
+-        if (DEBUG) console.log('Back online — flushing sync queues');
+-        flushQueue()
+-          .then((res) => {
+-            if (res?.flushed > 0 && DEBUG) console.log(' Queue flushed:', res);
+-          })
+-          .catch((e) => console.warn('Queue flush failed:', e));
+-      }
+-      wasConnected = connected;
++      setIsOnline(!!state.isConnected && state.isInternetReachable !== false);
+     });
+ 
+     return () => unsub();
+@@ -158,47 +144,29 @@ const ScannerScreen = ({ navigation, route }) => {
+     }
+   };
+ 
++  // Online path: center-crop + 384x384 JPEG q0.9 (shared helper). Returns the base64
++  // sent to the server AND the file uri of that exact bitmap, so Save can keep it.
+   const preprocessImage = async (imageUri) => {
+-    const { width: imgW, height: imgH } = await ImageManipulator.manipulateAsync(
+-      imageUri,
+-      [],
+-      {}
+-    );
+-
+-    const shortSide = Math.min(imgW, imgH);
+-    const cropSize = Math.round(shortSide * CROP_FRACTION);
+-    const originX = Math.round((imgW - cropSize) / 2);
+-    const originY = Math.round((imgH - cropSize) / 2);
+-
+-    const manipulatedImage = await ImageManipulator.manipulateAsync(
+-      imageUri,
+-      [
+-        {
+-          crop: {
+-            originX,
+-            originY,
+-            width: cropSize,
+-            height: cropSize,
+-          },
+-        },
+-        { resize: { width: 384, height: 384 } },
+-      ],
+-      { format: ImageManipulator.SaveFormat.JPEG, compress: 0.9 }
+-    );
++    const prepared = await prepareScanImage(imageUri, {
++      centerCrop: true,
++      cropFraction: CROP_FRACTION,
++    });
+ 
+-    const response = await fetch(manipulatedImage.uri);
++    const response = await fetch(prepared.uri);
+     const blob = await response.blob();
+-    return new Promise((resolve, reject) => {
++    const base64 = await new Promise((resolve, reject) => {
+       const reader = new FileReader();
+       reader.onload = () => resolve(reader.result.split(',')[1]);
+       reader.onerror = reject;
+       reader.readAsDataURL(blob);
+     });
++    return { base64, preparedUri: prepared.uri };
+   };
+ 
+-  const navigateToResult = (result, imageUri) => {
++  const navigateToResult = (result, imageUri, preparedImageUri) => {
+     navigation.navigate('Result', {
+       imageUri,
++      preparedImageUri: preparedImageUri || null,
+       diseaseKey: result.diseaseKey || 'UNKNOWN',
+       diseaseLabel: result.diseaseName || 'Unknown Disease',
+       confidence: result.confidence || 0,
+@@ -215,31 +183,6 @@ const ScannerScreen = ({ navigation, route }) => {
+     });
+   };
+ 
+-  const queueOfflineScan = async (imageUri, result) => {
+-    try {
+-      const base64Image = await FileSystem.readAsStringAsync(imageUri, {
+-        encoding: FileSystem.EncodingType.Base64,
+-      });
+-      const scanId = generateScanId();
+-      await enqueueMutation({
+-        type: 'CREATE_SCAN',
+-        scanId,
+-        payload: {
+-          imageBase64: base64Image,
+-          cropType: 'cassava',
+-          capturedAt: new Date().toISOString(),
+-          diagnosisCode: result.diseaseKey,
+-          confidence: result.confidence,
+-          modelVersion: 'convnext-384-tflite-v1',
+-          inferredAt: new Date().toISOString(),
+-        },
+-      });
+-      if (DEBUG) console.log('Offline scan queued:', scanId);
+-    } catch (e) {
+-      console.warn('Failed to queue offline scan:', e);
+-    }
+-  };
+-
+   const normalizeGeminiResult = (geminiData, fallbackResult) => {
+     const keyMap = {
+       'Cassava Mosaic Disease': 'CMD',
+@@ -287,7 +230,7 @@ const ScannerScreen = ({ navigation, route }) => {
+ 
+     if (isApiReady && isOnline) {
+       try {
+-        const base64Image = await preprocessImage(image);
++        const { base64: base64Image, preparedUri } = await preprocessImage(image);
+ 
+         const response = await fetchWithTimeout(API_URL, {
+           method: 'POST',
+@@ -319,7 +262,7 @@ const ScannerScreen = ({ navigation, route }) => {
+ 
+         if (result.success) {
+           Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+-          navigateToResult(result, image);
++          navigateToResult(result, image, preparedUri);
+           setLoading(false);
+           return;
+         }
+@@ -402,16 +345,14 @@ const ScannerScreen = ({ navigation, route }) => {
+         Toast.show({
+           type: 'info',
+           text1: 'Offline Result',
+-          text2: 'Saved locally — will sync when online.',
++          text2: 'Tap Save on the result to keep it. It uploads when you are online.',
+           visibilityTime: 3000,
+         });
+       }
+ 
+       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+ 
+-      await queueOfflineScan(image, tfliteResult);
+-
+-      navigateToResult(enriched, image);
++      navigateToResult(enriched, image, tfliteResult.preparedImageUri);
+     } catch (error) {
+       console.error('Offline inference failed:', error);
+       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+diff --git a/src/utils/__tests__/syncManager.test.js b/src/utils/__tests__/syncManager.test.js
+index 9ae4774..42ab959 100644
+--- a/src/utils/__tests__/syncManager.test.js
++++ b/src/utils/__tests__/syncManager.test.js
+@@ -40,6 +40,16 @@ jest.mock('@react-native-community/netinfo', () => ({
+   }))
+ }));
+ 
++jest.mock('expo-file-system/legacy', () => ({
++  documentDirectory: 'file:///docs/',
++  EncodingType: { Base64: 'base64' },
++  makeDirectoryAsync: jest.fn(() => Promise.resolve()),
++  copyAsync: jest.fn(() => Promise.resolve()),
++  deleteAsync: jest.fn(() => Promise.resolve()),
++  getInfoAsync: jest.fn(() => Promise.resolve({ exists: true })),
++  readAsStringAsync: jest.fn(() => Promise.resolve('AAAA')),
++}));
++
+ jest.mock('base64-arraybuffer', () => ({
+   decode: jest.fn(() => new ArrayBuffer(8))
+ }));
+@@ -48,7 +58,7 @@ jest.mock('base64-arraybuffer', () => ({
+ jest.mock('../supabaseClient', () => ({
+   supabase: {
+     auth: {
+-      getUser: jest.fn()
++      getSession: jest.fn()
+     },
+     from: jest.fn(),
+     storage: {
+@@ -63,8 +73,8 @@ describe('Sync Manager', () => {
+     jest.clearAllMocks();
+     
+     // Setup default mock implementations
+-    supabase.auth.getUser.mockResolvedValue({
+-      data: { user: { id: 'test_user' } }
++    supabase.auth.getSession.mockResolvedValue({
++      data: { session: { user: { id: 'test_user' } } }
+     });
+     
+     // Mock successful storage operations
+@@ -146,7 +156,7 @@ describe('Sync Manager', () => {
+       update: jest.fn().mockReturnThis(),
+       delete: jest.fn().mockReturnThis(),
+       eq: jest.fn().mockReturnThis(),
+-      single: jest.fn().mockResolvedValue({
++      maybeSingle: jest.fn().mockResolvedValue({
+         data: { image_path: 'test/path.jpg' },
+         error: null
+       }),
+@@ -174,13 +184,13 @@ describe('Sync Manager', () => {
+     // Create a mock that simulates network error with specific message
+     const networkError = new Error('Network request failed');
+     // Make sure it has the right message format that flushQueue checks
+-    networkError.message = 'network error';
++    networkError.message = 'Network request failed'; // real RN message (capital N)
+     
+     // Mock the from method to return a query builder that fails
+     const mockQueryBuilder = {
+       select: jest.fn().mockReturnThis(),
+       eq: jest.fn().mockReturnThis(),
+-      single: jest.fn().mockRejectedValue(networkError),
++      maybeSingle: jest.fn().mockRejectedValue(networkError),
+       delete: jest.fn().mockRejectedValue(networkError),
+       update: jest.fn().mockRejectedValue(networkError)
+     };
+@@ -249,4 +259,105 @@ describe('Sync Manager', () => {
+     const cached = JSON.parse(await AsyncStorage.getItem('rootcare_scan_cache'));
+     expect(cached[0].is_archived).toBe(true);
+   });
++
++  describe('CREATE_SCAN (offline-first image save)', () => {
++    const FileSystem = require('expo-file-system/legacy');
++    const { savePendingScan } = require('../syncManager');
++
++    const mockScansBuilder = (upsertImpl) => {
++      const builder = {
++        select: jest.fn().mockReturnThis(),
++        eq: jest.fn().mockReturnThis(),
++        maybeSingle: jest.fn().mockResolvedValue({ data: null, error: null }),
++        upsert: jest.fn(upsertImpl || (() => Promise.resolve({ error: null }))),
++      };
++      supabase.from.mockReturnValue(builder);
++      return builder;
++    };
++
++    const baseScan = (scanId) => ({
++      scanId,
++      userId: 'test_user',
++      preparedImageUri: 'file:///cache/prepared.jpg',
++      diseaseCode: 'CMD',
++      diseaseName: 'Cassava Mosaic Disease',
++      accuracy: 93.5,
++    });
++
++    test('7. savePendingScan copies file, queues file path (no base64), confidence 0..1', async () => {
++      await savePendingScan(baseScan('scan_a'));
++      expect(FileSystem.copyAsync).toHaveBeenCalledWith({
++        from: 'file:///cache/prepared.jpg',
++        to: 'file:///docs/pending-scans/scan_a.jpg',
++      });
++      const queue = JSON.parse(await AsyncStorage.getItem('rootcare_sync_queue'));
++      expect(queue).toHaveLength(1);
++      expect(queue[0].payload.localImagePath).toBe('file:///docs/pending-scans/scan_a.jpg');
++      expect(queue[0].payload.imageBase64).toBeUndefined();
++      expect(queue[0].payload.confidence).toBeCloseTo(0.935);
++    });
++
++    test('8. saving the same scanId twice keeps ONE queue item', async () => {
++      await savePendingScan(baseScan('scan_b'));
++      await savePendingScan(baseScan('scan_b'));
++      const queue = JSON.parse(await AsyncStorage.getItem('rootcare_sync_queue'));
++      expect(queue).toHaveLength(1);
++    });
++
++    test('9. flush uploads with upsert:true, upserts row, then deletes file and queue item', async () => {
++      const upload = jest.fn().mockResolvedValue({ error: null });
++      supabase.storage.from.mockReturnValue({ upload, remove: jest.fn() });
++      const builder = mockScansBuilder();
++
++      await savePendingScan(baseScan('scan_c'));
++      const result = await flushQueue();
++
++      expect(result.flushed).toBe(1);
++      expect(upload).toHaveBeenCalledWith(
++        'test_user/scan_c.jpg', expect.anything(), expect.objectContaining({ upsert: true })
++      );
++      expect(builder.upsert).toHaveBeenCalledWith(
++        expect.objectContaining({ id: 'scan_c', image_path: 'test_user/scan_c.jpg' }),
++        { onConflict: 'id' }
++      );
++      expect(FileSystem.deleteAsync).toHaveBeenLastCalledWith(
++        'file:///docs/pending-scans/scan_c.jpg', { idempotent: true }
++      );
++      expect(JSON.parse(await AsyncStorage.getItem('rootcare_sync_queue'))).toHaveLength(0);
++    });
++
++    test('10. upload ok but row upsert fails -> item and local file kept; retry uses upsert (no duplicate)', async () => {
++      const upload = jest.fn().mockResolvedValue({ error: null });
++      supabase.storage.from.mockReturnValue({ upload, remove: jest.fn() });
++      let calls = 0;
++      const builder = mockScansBuilder(() =>
++        Promise.resolve(++calls === 1 ? { error: new Error('db down') } : { error: null })
++      );
++
++      await savePendingScan(baseScan('scan_d'));
++      FileSystem.deleteAsync.mockClear();
++
++      const first = await flushQueue();
++      expect(first.flushed).toBe(0);
++      expect(first.failed).toBe(1);
++      expect(FileSystem.deleteAsync).not.toHaveBeenCalled();
++      expect(JSON.parse(await AsyncStorage.getItem('rootcare_sync_queue'))).toHaveLength(1);
++
++      const second = await flushQueue();
++      expect(second.flushed).toBe(1);
++      expect(builder.upsert).toHaveBeenCalledTimes(2);
++      expect(upload).toHaveBeenCalledTimes(2); // same path, upsert:true -> overwrite, not a 2nd object
++      expect(JSON.parse(await AsyncStorage.getItem('rootcare_sync_queue'))).toHaveLength(0);
++    });
++
++    test('11. concurrent flushQueue() calls do not double-process', async () => {
++      const upload = jest.fn().mockResolvedValue({ error: null });
++      supabase.storage.from.mockReturnValue({ upload, remove: jest.fn() });
++      mockScansBuilder();
++
++      await savePendingScan(baseScan('scan_e'));
++      await Promise.all([flushQueue(), flushQueue(), flushQueue()]);
++      expect(upload).toHaveBeenCalledTimes(1);
++    });
++  });
+ });
+diff --git a/src/utils/offlineInference.js b/src/utils/offlineInference.js
+index 0516bf0..0ec50d0 100644
+--- a/src/utils/offlineInference.js
++++ b/src/utils/offlineInference.js
+@@ -1,9 +1,9 @@
+ // utils/offlineInference.js
+ import { Asset } from 'expo-asset';
+ import * as FileSystem from 'expo-file-system/legacy';
+-import * as ImageManipulator from 'expo-image-manipulator';
+ import { Skia, ColorType, AlphaType } from '@shopify/react-native-skia';
+ import { loadTensorflowModel } from 'react-native-fast-tflite';
++import { prepareScanImage } from './scanImage';
+ 
+ // ---- Config ----
+ const IMAGE_SIZE = 384;
+@@ -202,11 +202,9 @@ const normalizeOutput = (raw) => {
+ export const runOfflineInference = async (imageUri) => {
+   const model = await loadOfflineModel();
+ 
+-  const manipulated = await ImageManipulator.manipulateAsync(
+-    imageUri,
+-    [{ resize: { width: IMAGE_SIZE, height: IMAGE_SIZE } }],
+-    { format: ImageManipulator.SaveFormat.JPEG, compress: 0.9 }
+-  );
++  // Same operation as before (resize only, JPEG q0.9), now via the shared helper
++  // so the exact bitmap the model sees can also be saved with the scan.
++  const manipulated = await prepareScanImage(imageUri, { centerCrop: false });
+ 
+   const { data: rgba, width, height } = await decodeImageNative(manipulated.uri);
+ 
+@@ -296,6 +294,7 @@ export const runOfflineInference = async (imageUri) => {
+     confidence: parseFloat((confidence * 100).toFixed(2)),
+     detection_metrics: detectionMetrics,
+     allProbabilities,
++    preparedImageUri: manipulated.uri, // the exact 384x384 JPEG the model received
+     _offline: true,
+   };
+ };
+\ No newline at end of file
+diff --git a/src/utils/scanImage.js b/src/utils/scanImage.js
+new file mode 100644
+index 0000000..a36d364
+--- /dev/null
++++ b/src/utils/scanImage.js
+@@ -0,0 +1,37 @@
++import * as ImageManipulator from 'expo-image-manipulator';
++
++// The ONE place that produces the 384x384 JPEG (q0.9) used as the model input
++// AND as the copy that is saved/uploaded. Do not change these numbers without
++// retraining/revalidating the model.
++export const SCAN_IMAGE_SIZE = 384;
++export const SCAN_JPEG_QUALITY = 0.9;
++
++/**
++ * prepareScanImage(uri, { centerCrop, cropFraction })
++ *
++ * centerCrop=false -> resize only (the exact op runOfflineInference always did)
++ * centerCrop=true  -> center square crop of `cropFraction` of the short side,
++ *                     then resize (the exact op the online/server path did)
++ *
++ * Returns { uri, width, height } of the temporary 384x384 JPEG.
++ */
++export const prepareScanImage = async (uri, { centerCrop = false, cropFraction = 0.8 } = {}) => {
++  const actions = [];
++
++  if (centerCrop) {
++    const { width: imgW, height: imgH } = await ImageManipulator.manipulateAsync(uri, [], {});
++    const shortSide = Math.min(imgW, imgH);
++    const cropSize = Math.round(shortSide * cropFraction);
++    const originX = Math.round((imgW - cropSize) / 2);
++    const originY = Math.round((imgH - cropSize) / 2);
++    actions.push({ crop: { originX, originY, width: cropSize, height: cropSize } });
++  }
++
++  actions.push({ resize: { width: SCAN_IMAGE_SIZE, height: SCAN_IMAGE_SIZE } });
++
++  const out = await ImageManipulator.manipulateAsync(uri, actions, {
++    format: ImageManipulator.SaveFormat.JPEG,
++    compress: SCAN_JPEG_QUALITY,
++  });
++  return { uri: out.uri, width: out.width, height: out.height };
++};
+diff --git a/src/utils/syncManager.js b/src/utils/syncManager.js
+index 72e6e46..e0d2097 100644
+--- a/src/utils/syncManager.js
++++ b/src/utils/syncManager.js
+@@ -1,5 +1,6 @@
+ import AsyncStorage from '@react-native-async-storage/async-storage';
+ import NetInfo from '@react-native-community/netinfo';
++import * as FileSystem from 'expo-file-system/legacy';
+ import { decode } from 'base64-arraybuffer';
+ import { supabase } from './supabaseClient';
+ import { DISEASE_INFO } from '../constants/diseaseInfo';
+@@ -8,14 +9,34 @@ import { DISEASE_INFO } from '../constants/diseaseInfo';
+ const QUEUE_KEY = 'rootcare_sync_queue';
+ const CACHE_KEY = 'rootcare_scan_cache';
+ 
+-// Generate unique ID for scans
++export const SCAN_BUCKET = 'plant-scans';
++// Set to true ONLY if the `plant-scans` bucket is public in the Supabase dashboard.
++// When false, scans.image_url stays null and the admin panel creates signed URLs
++// from scans.image_path. (Admin handles both cases.)
++const SCAN_BUCKET_IS_PUBLIC = false;
++
++const PENDING_DIR = `${FileSystem.documentDirectory}pending-scans/`;
++const pendingImagePathFor = (scanId) => `${PENDING_DIR}${scanId}.jpg`;
++
++// Real UUID v4. Valid whether scans.id is `uuid` or `text`.
+ export const generateScanId = () => {
+-  const timestamp = Date.now().toString(36);
+-  const random = Math.random().toString(36).substring(2, 8);
+-  return `${timestamp}_${random}`;
++  const c = globalThis?.crypto;
++  if (c && typeof c.randomUUID === 'function') return c.randomUUID();
++  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (ch) => {
++    const r = (Math.random() * 16) | 0;
++    return (ch === 'x' ? r : (r & 0x3) | 0x8).toString(16);
++  });
++};
++
++// ---------- queue storage (all writes serialized through one lock) ----------
++
++let queueLock = Promise.resolve();
++const withQueueLock = (fn) => {
++  const run = queueLock.then(fn, fn);
++  queueLock = run.catch(() => {});
++  return run;
+ };
+ 
+-// Load queue from AsyncStorage
+ const loadQueue = async () => {
+   try {
+     const data = await AsyncStorage.getItem(QUEUE_KEY);
+@@ -26,7 +47,6 @@ const loadQueue = async () => {
+   }
+ };
+ 
+-// Save queue to AsyncStorage
+ const saveQueue = async (queue) => {
+   try {
+     await AsyncStorage.setItem(QUEUE_KEY, JSON.stringify(queue));
+@@ -35,207 +55,447 @@ const saveQueue = async (queue) => {
+   }
+ };
+ 
+-// Enqueue mutation with dedup/collapse rules
+-export const enqueueMutation = async (mutation) => {
+-  const queue = await loadQueue();
+-  const { type, scanId } = mutation;
+-
+-  // Handle DELETE_FOREVER: remove all other mutations for this scanId
+-  if (type === 'DELETE_FOREVER') {
+-    const filtered = queue.filter(item => item.scanId !== scanId);
+-    filtered.push({ ...mutation, createdAt: Date.now(), attempts: 0 });
+-    await saveQueue(filtered);
+-    return mutation;
++const deleteLocalFile = async (path) => {
++  if (!path) return;
++  try {
++    await FileSystem.deleteAsync(path, { idempotent: true });
++  } catch (error) {
++    if (__DEV__) console.log('[queue] file delete skipped:', error?.message);
+   }
++};
++
++// Remove exactly one queued item (matched by identity), without touching the rest.
++const removeMutation = (mutation) =>
++  withQueueLock(async () => {
++    const queue = await loadQueue();
++    await saveQueue(
++      queue.filter(
++        (item) =>
++          !(item.type === mutation.type &&
++            item.scanId === mutation.scanId &&
++            item.createdAt === mutation.createdAt)
++      )
++    );
++  });
++
++const bumpAttempts = (mutation, errorMessage) =>
++  withQueueLock(async () => {
++    const queue = await loadQueue();
++    const idx = queue.findIndex(
++      (item) =>
++        item.type === mutation.type &&
++        item.scanId === mutation.scanId &&
++        item.createdAt === mutation.createdAt
++    );
++    if (idx !== -1) {
++      queue[idx] = {
++        ...queue[idx],
++        attempts: (queue[idx].attempts || 0) + 1,
++        lastError: String(errorMessage || '').slice(0, 200),
++      };
++      await saveQueue(queue);
++    }
++  });
++
++// Enqueue mutation with dedup/collapse rules
++export const enqueueMutation = async (mutation) =>
++  withQueueLock(async () => {
++    const queue = await loadQueue();
++    const { type, scanId } = mutation;
++    const fresh = { ...mutation, createdAt: Date.now(), attempts: 0 };
++
++    // DELETE_FOREVER: drop every other pending mutation (and pending image) for this scan
++    if (type === 'DELETE_FOREVER') {
++      const dropped = queue.filter((item) => item.scanId === scanId);
++      for (const item of dropped) {
++        if (item.type === 'CREATE_SCAN') await deleteLocalFile(item.payload?.localImagePath);
++      }
++      const filtered = queue.filter((item) => item.scanId !== scanId);
++      filtered.push(fresh);
++      await saveQueue(filtered);
++      return mutation;
++    }
++
++    // CREATE_SCAN: one per scanId (pressing Save twice replaces, never duplicates)
++    // State mutations: replace existing same-type for same scanId
++    const existingIndex = queue.findIndex(
++      (item) => item.scanId === scanId && item.type === type
++    );
++    if (existingIndex !== -1) queue[existingIndex] = fresh;
++    else queue.push(fresh);
+ 
+-  // Handle CREATE_SCAN: always add new
+-  if (type === 'CREATE_SCAN') {
+-    queue.push({ ...mutation, createdAt: Date.now(), attempts: 0 });
+     await saveQueue(queue);
+-    return mutation;
+-  }
++    return fresh;
++  });
+ 
+-  // Handle state mutations: replace existing same-type for same scanId
+-  const existingIndex = queue.findIndex(
+-    item => item.scanId === scanId && item.type === type
+-  );
++// ---------- offline-first scan save ----------
+ 
+-  const newMutation = { ...mutation, createdAt: Date.now(), attempts: 0 };
++const toConfidence01 = (accuracyPercent) => {
++  const n = typeof accuracyPercent === 'number' ? accuracyPercent : parseFloat(accuracyPercent);
++  if (!Number.isFinite(n)) return null;
++  return Math.max(0, Math.min(1, n / 100));
++};
+ 
+-  if (existingIndex !== -1) {
+-    queue[existingIndex] = newMutation;
+-  } else {
+-    queue.push(newMutation);
++/**
++ * Saves a scan LOCALLY first: copies the 384x384 JPEG into documentDirectory/pending-scans
++ * and enqueues one CREATE_SCAN mutation (file path only, never base64).
++ * Does not touch the network. Call flushQueue() afterwards if online.
++ *
++ * scan: { scanId?, preparedImageUri, userId, cropType, diseaseCode, diseaseName, diseaseType,
++ *         severity, accuracy (0..100), description, treatment, prevention, symptoms, capturedAt }
++ */
++export const savePendingScan = async (scan) => {
++  const scanId = scan.scanId || generateScanId();
++
++  let localImagePath = null;
++  if (scan.preparedImageUri) {
++    await FileSystem.makeDirectoryAsync(PENDING_DIR, { intermediates: true });
++    localImagePath = pendingImagePathFor(scanId);
++    await FileSystem.deleteAsync(localImagePath, { idempotent: true });
++    await FileSystem.copyAsync({ from: scan.preparedImageUri, to: localImagePath });
+   }
+ 
+-  await saveQueue(queue);
+-  return newMutation;
++  await enqueueMutation({
++    type: 'CREATE_SCAN',
++    scanId,
++    payload: {
++      userId: scan.userId,
++      localImagePath,
++      cropType: scan.cropType || 'Cassava',
++      capturedAt: scan.capturedAt || new Date().toISOString(),
++      diseaseCode: scan.diseaseCode || null,
++      diseaseName: scan.diseaseName || null,
++      diseaseType: scan.diseaseType || null,
++      severity: scan.severity || null,
++      accuracy: typeof scan.accuracy === 'number' ? scan.accuracy : null,
++      confidence: toConfidence01(scan.accuracy),
++      description: scan.description || null,
++      treatment: scan.treatment || null,
++      prevention: scan.prevention || null,
++      symptoms: scan.symptoms || null,
++    },
++  });
++
++  return { scanId, localImagePath };
+ };
+ 
+-// Flush queue to Supabase
+-export const flushQueue = async () => {
+-  const queue = await loadQueue();
+-  let flushed = 0;
+-  let failed = 0;
+-  const remaining = [];
++// ---------- flush ----------
++
++const isNetworkError = (error) => {
++  const msg = String(error?.message || error || '').toLowerCase();
++  return (
++    msg.includes('network') ||
++    msg.includes('timeout') ||
++    msg.includes('timed out') ||
++    msg.includes('connection') ||
++    msg.includes('failed to fetch') ||
++    msg.includes('offline')
++  );
++};
++
++const MAX_STATE_MUTATION_ATTEMPTS = 5;
+ 
+-  // Get current user
+-  const { data: { user } } = await supabase.auth.getUser();
++const runFlush = async () => {
++  const result = { flushed: 0, failed: 0, remaining: 0, stoppedOnNetwork: false };
++
++  // getSession reads the locally stored session (no network round-trip)
++  const { data: { session } } = await supabase.auth.getSession();
++  const user = session?.user;
++  const queue = await loadQueue();
+   if (!user) {
+-    return { flushed, failed, remaining: queue.length };
++    result.remaining = queue.length;
++    return result;
+   }
+ 
+-  for (let i = 0; i < queue.length; i++) {
+-    const mutation = queue[i];
++  const blockedScanIds = new Set(); // a failed CREATE_SCAN blocks later mutations for that scan
++
++  for (const mutation of queue) {
++    // Never upload one account's pending scan under another account
++    if (mutation.type === 'CREATE_SCAN' && mutation.payload?.userId &&
++        mutation.payload.userId !== user.id) {
++      result.remaining++;
++      continue;
++    }
++    if (blockedScanIds.has(mutation.scanId)) {
++      result.remaining++;
++      continue;
++    }
++
+     try {
+       await processMutation(mutation, user.id);
+-      flushed++;
++      await removeMutation(mutation);
++      result.flushed++;
+     } catch (error) {
+-      // Check if it's a network error
+-      if (error.message?.includes('network') || 
+-          error.message?.includes('timeout') ||
+-          error.message?.includes('connection')) {
+-        // Network failure: stop processing, keep remaining
+-        remaining.push(...queue.slice(i));
+-        await saveQueue(remaining);
+-        return { flushed, failed, remaining: remaining.length };
++      if (isNetworkError(error)) {
++        result.stoppedOnNetwork = true;
++        result.remaining += 1;
++        break; // keep everything from here on, try again on next trigger
++      }
++
++      if (__DEV__) console.log('[queue] mutation failed:', mutation?.type, error?.message);
++      result.failed++;
++
++      if (mutation.type === 'CREATE_SCAN') {
++        // The local file is the only copy: never drop it. Keep and retry next flush.
++        blockedScanIds.add(mutation.scanId);
++        await bumpAttempts(mutation, error?.message);
++        result.remaining++;
++      } else if ((mutation.attempts || 0) + 1 >= MAX_STATE_MUTATION_ATTEMPTS) {
++        await removeMutation(mutation); // state toggles are safe to give up on
+       } else {
+-        // Other error: log quietly, drop this mutation, continue
+-        if (__DEV__) console.log('[queue] mutation failed:', mutation?.type, error?.message);
+-        failed++;
++        await bumpAttempts(mutation, error?.message);
++        result.remaining++;
+       }
+     }
+   }
+ 
+-  // Save remaining queue (should be empty if all succeeded)
+-  await saveQueue(remaining);
+-  return { flushed, failed, remaining: remaining.length };
++  return result;
++};
++
++// Only one flush at a time. If someone asks while one is running, run once more afterwards
++// so an item enqueued mid-flush is not left waiting for the next trigger.
++let flushPromise = null;
++let flushRequested = false;
++
++export const flushQueue = () => {
++  if (flushPromise) {
++    flushRequested = true;
++    return flushPromise;
++  }
++  flushPromise = (async () => {
++    const total = { flushed: 0, failed: 0, remaining: 0 };
++    try {
++      do {
++        flushRequested = false;
++        const r = await runFlush();
++        total.flushed += r.flushed;
++        total.failed += r.failed;
++        total.remaining = r.remaining;
++        if (r.stoppedOnNetwork) break;
++      } while (flushRequested);
++      return total;
++    } finally {
++      flushPromise = null;
++    }
++  })();
++  return flushPromise;
+ };
+ 
+ // Process individual mutation
+ const processMutation = async (mutation, userId) => {
+   const { type, scanId, payload } = mutation;
+ 
++  const run = async (query) => {
++    const { error } = await query;
++    if (error) throw error;
++  };
++
+   switch (type) {
+     case 'CREATE_SCAN':
+       await processCreateScan(mutation, userId);
+       break;
+     case 'SET_SAVED':
+-      await supabase
+-        .from('scans')
+-        .update({ is_saved: payload.isSaved })
+-        .eq('id', scanId)
+-        .eq('user_id', userId);
++      await run(supabase.from('scans').update({ is_saved: payload.isSaved }).eq('id', scanId).eq('user_id', userId));
+       break;
+     case 'SET_ARCHIVED':
+-      await supabase
+-        .from('scans')
+-        .update({
++      await run(
++        supabase.from('scans').update({
+           is_archived: payload.isArchived,
+-          archived_at: payload.isArchived ? new Date().toISOString() : null
+-        })
+-        .eq('id', scanId)
+-        .eq('user_id', userId);
++          archived_at: payload.isArchived ? new Date().toISOString() : null,
++        }).eq('id', scanId).eq('user_id', userId)
++      );
+       break;
+     case 'SET_DELETED':
+-      await supabase
+-        .from('scans')
+-        .update({
++      await run(
++        supabase.from('scans').update({
+           is_deleted: payload.isDeleted,
+           deleted_at: payload.isDeleted ? new Date().toISOString() : null,
+-          is_archived: payload.isDeleted ? false : undefined
+-        })
+-        .eq('id', scanId)
+-        .eq('user_id', userId);
++          is_archived: payload.isDeleted ? false : undefined,
++        }).eq('id', scanId).eq('user_id', userId)
++      );
+       break;
+     case 'DELETE_FOREVER':
+       await processDeleteForever(scanId, userId);
+       break;
+     case 'UPDATE_NOTES':
+-      await supabase
+-        .from('scans')
+-        .update({ notes: payload.notes })
+-        .eq('id', scanId)
+-        .eq('user_id', userId);
++      await run(supabase.from('scans').update({ notes: payload.notes }).eq('id', scanId).eq('user_id', userId));
+       break;
+   }
+ };
+ 
+-// Process CREATE_SCAN with image upload
++// CREATE_SCAN: idempotent + retry-safe.
++//   1. upload (upsert:true)  2. upsert scans row on id  3. only then delete local file
++// (the caller removes the queue item after this resolves)
+ const processCreateScan = async (mutation, userId) => {
+   const { scanId, payload } = mutation;
+-  const { imageBase64, cropType, capturedAt, diagnosisCode, confidence, modelVersion, inferredAt } = payload;
+ 
+-  // Convert base64 to ArrayBuffer
+-  const imageBuffer = decode(imageBase64);
++  // Items queued by the old flow (base64 in AsyncStorage, created at scan time) have no
++  // localImagePath. They were never "Saved" by the user, so they are discarded.
++  if (!payload || !('localImagePath' in payload)) {
++    if (__DEV__) console.log('[queue] discarding legacy CREATE_SCAN', scanId);
++    return;
++  }
+ 
+-  // Upload to storage
+   const imagePath = `${userId}/${scanId}.jpg`;
+-  const { error: uploadError } = await supabase.storage
+-    .from('plant-scans')
+-    .upload(imagePath, imageBuffer, {
+-      contentType: 'image/jpeg',
+-      cacheControl: '3600'
+-    });
+-
+-  if (uploadError) throw uploadError;
++  let hasImage = false;
++
++  if (payload.localImagePath) {
++    const info = await FileSystem.getInfoAsync(payload.localImagePath);
++    if (info.exists) {
++      const base64 = await FileSystem.readAsStringAsync(payload.localImagePath, {
++        encoding: FileSystem.EncodingType.Base64,
++      });
++      const { error: uploadError } = await supabase.storage
++        .from(SCAN_BUCKET)
++        .upload(imagePath, decode(base64), {
++          contentType: 'image/jpeg',
++          cacheControl: '3600',
++          upsert: true,
++        });
++      if (uploadError) throw uploadError;
++      hasImage = true;
++    } else {
++      // File is gone (e.g. crash after a previous successful run, before the queue item
++      // was removed). If the row already has its image there is nothing left to do.
++      const { data: existing, error: lookupError } = await supabase
++        .from('scans')
++        .select('id, image_path')
++        .eq('id', scanId)
++        .maybeSingle();
++      if (lookupError) throw lookupError;
++      if (existing?.image_path === imagePath) return;
++    }
++  }
+ 
+-  // Insert scan
+-  const { error: scanError } = await supabase
+-    .from('scans')
+-    .insert({
+-      id: scanId,
+-      user_id: userId,
+-      crop_type: cropType,
+-      image_path: imagePath,
+-      captured_at: capturedAt || new Date().toISOString()
+-    });
++  const imageUrl =
++    hasImage && SCAN_BUCKET_IS_PUBLIC
++      ? supabase.storage.from(SCAN_BUCKET).getPublicUrl(imagePath).data.publicUrl
++      : null;
++
++  const row = {
++    id: scanId,
++    user_id: userId,
++    crop_type: payload.cropType,
++    captured_at: payload.capturedAt || new Date().toISOString(),
++    is_saved: true,
++    is_archived: false,
++    is_deleted: false,
++    disease_code: payload.diseaseCode,
++    disease_name: payload.diseaseName,
++    disease_type: payload.diseaseType,
++    severity: payload.severity,
++    accuracy: payload.accuracy,
++    confidence: payload.confidence,
++    description: payload.description,
++    treatment: payload.treatment,
++    prevention: payload.prevention,
++    symptoms: payload.symptoms,
++  };
++  if (hasImage) {
++    row.image_path = imagePath;
++    row.image_url = imageUrl;
++  }
+ 
++  const { error: scanError } = await supabase.from('scans').upsert(row, { onConflict: 'id' });
+   if (scanError) throw scanError;
+ 
+-  // Insert plant result
+-  const { error: resultError } = await supabase
+-    .from('plant_results')
+-    .insert({
+-      scan_id: scanId,
+-      user_id: userId,
+-      diagnosis_code: diagnosisCode,
+-      confidence: confidence,
+-      model_version: modelVersion,
+-      inferred_at: inferredAt || new Date().toISOString()
++  await deleteLocalFile(payload.localImagePath);
++};
++
++// Rows from `scans` hold image_path = storage path (new) or a local file:// URI (old rows).
++// Returns copies whose image_path is something <Image source={{uri}}> can display.
++export const resolveScanImageUris = async (rows) => {
++  const out = (rows || []).map((r) => ({ ...r }));
++  const isStoragePath = (p) => p && !/^(file|content|https?):/i.test(p);
++  const targets = out.filter((r) => isStoragePath(r.image_path));
++  if (!targets.length) return out;
++
++  if (SCAN_BUCKET_IS_PUBLIC) {
++    targets.forEach((r) => {
++      r.image_path = supabase.storage.from(SCAN_BUCKET).getPublicUrl(r.image_path).data.publicUrl;
+     });
++    return out;
++  }
+ 
+-  if (resultError) throw resultError;
++  try {
++    const { data, error } = await supabase.storage
++      .from(SCAN_BUCKET)
++      .createSignedUrls(targets.map((r) => r.image_path), 3600);
++    if (error) throw error;
++    const byPath = new Map((data || []).map((d) => [d.path, d.signedUrl]));
++    targets.forEach((r) => { r.image_path = byPath.get(r.image_path) || null; });
++  } catch (e) {
++    if (__DEV__) console.log('[images] signing skipped:', e?.message);
++    targets.forEach((r) => { r.image_path = null; }); // offline: show placeholder
++  }
++  return out;
+ };
+ 
+-// Process DELETE_FOREVER
++// Removes storage object + any pending local file / queued mutations for these scans.
++// Best effort on storage so a DB delete that already succeeded is never reported as failed.
++export const removeScanAssets = async (scanIds, userIdOverride) => {
++  const ids = (Array.isArray(scanIds) ? scanIds : [scanIds]).filter(Boolean);
++  if (!ids.length) return;
++
++  // pending local files + queued CREATE_SCAN for these scans
++  await withQueueLock(async () => {
++    const queue = await loadQueue();
++    const keep = [];
++    for (const item of queue) {
++      if (ids.includes(item.scanId) && item.type !== 'DELETE_FOREVER') {
++        if (item.type === 'CREATE_SCAN') await deleteLocalFile(item.payload?.localImagePath);
++        continue;
++      }
++      keep.push(item);
++    }
++    await saveQueue(keep);
++  });
++  await Promise.all(ids.map((id) => deleteLocalFile(pendingImagePathFor(id))));
++
++  let userId = userIdOverride;
++  if (!userId) {
++    const { data: { session } } = await supabase.auth.getSession();
++    userId = session?.user?.id;
++  }
++  if (!userId) return;
++
++  const { error } = await supabase.storage
++    .from(SCAN_BUCKET)
++    .remove(ids.map((id) => `${userId}/${id}.jpg`)); // removing a missing object is a no-op
++  if (error) throw error;
++};
++
++// DELETE_FOREVER: storage object, pending local file, plant_results, then the scans row
+ const processDeleteForever = async (scanId, userId) => {
+-  // Fetch image_path first
+   const { data: scan, error: fetchError } = await supabase
+     .from('scans')
+     .select('image_path')
+     .eq('id', scanId)
+     .eq('user_id', userId)
+-    .single();
+-
++    .maybeSingle();
+   if (fetchError) throw fetchError;
+ 
+-  // Delete from storage
+-  if (scan?.image_path) {
+-    const { error: storageError } = await supabase.storage
+-      .from('plant-scans')
+-      .remove([scan.image_path]);
+-
+-    if (storageError) throw storageError;
++  // Real storage paths look like `${userId}/${scanId}.jpg`; old rows hold local file:// URIs
++  const paths = new Set([`${userId}/${scanId}.jpg`]);
++  if (scan?.image_path && !/^(file|content|https?):/i.test(scan.image_path)) {
++    paths.add(scan.image_path);
+   }
+ 
+-  // Delete from scans (plant_results cascades)
++  const { error: storageError } = await supabase.storage.from(SCAN_BUCKET).remove([...paths]);
++  if (storageError) throw storageError;
++
++  await deleteLocalFile(pendingImagePathFor(scanId));
++
++  // plant_results.scan_id has a FOREIGN KEY to scans(id) with NO cascade, so any result row
++  // must go first or the scans delete is rejected. (Best effort: there may be none.)
++  const { error: resultsError } = await supabase.from('plant_results').delete().eq('scan_id', scanId);
++  if (resultsError && __DEV__) console.log('[queue] plant_results cleanup skipped:', resultsError.message);
++
+   const { error: deleteError } = await supabase
+     .from('scans')
+     .delete()
+     .eq('id', scanId)
+     .eq('user_id', userId);
+-
+   if (deleteError) throw deleteError;
+ };
+ 
+diff --git a/supabase/sql/offline_scan_images.sql b/supabase/sql/offline_scan_images.sql
+new file mode 100644
+index 0000000..68e9b53
+--- /dev/null
++++ b/supabase/sql/offline_scan_images.sql
+@@ -0,0 +1,57 @@
++-- RootCare: offline-first scan images. Run in Supabase SQL Editor. Idempotent.
++-- Assumes public.is_admin() exists (admin/sql/admin_setup.sql) -> profiles.role = 'admin'.
++
++-- 0) Schema check: confirmed against your schema dump. scans.id is uuid (the app generates UUID v4)
++--    and every column the app writes already exists (image_path, image_url, disease_code,
++--    confidence, accuracy, ...). No column changes are needed.
++
++-- See which policies already exist before running section 1 (it only adds, never removes others):
++--   select tablename, policyname, cmd, qual from pg_policies
++--   where schemaname in ('public','storage') and tablename in ('scans','objects');
++-- is_admin() comes from admin/sql/admin_setup.sql:
++--   select public.is_admin();
++
++-- 1) scans RLS: the app UPSERTs (needs UPDATE on own rows) and deletes its own rows.
++--    admin_setup.sql only had select/insert for owners and update for admins.
++drop policy if exists s_own_upd on public.scans;
++create policy s_own_upd on public.scans for update
++  using (user_id = auth.uid()) with check (user_id = auth.uid());
++
++drop policy if exists s_own_del on public.scans;
++create policy s_own_del on public.scans for delete
++  using (user_id = auth.uid() or public.is_admin());
++
++-- 2) Bucket. Private is recommended (admin panel uses signed URLs). Leave as-is if it exists.
++insert into storage.buckets (id, name, public)
++values ('plant-scans', 'plant-scans', false)
++on conflict (id) do nothing;
++-- If you deliberately want it public instead: update storage.buckets set public = true where id = 'plant-scans';
++-- and set SCAN_BUCKET_IS_PUBLIC = true in src/utils/syncManager.js.
++
++-- 3) Storage policies on storage.objects for bucket plant-scans
++drop policy if exists "plant_scans_insert_own" on storage.objects;
++create policy "plant_scans_insert_own" on storage.objects for insert to authenticated
++  with check (bucket_id = 'plant-scans' and (storage.foldername(name))[1] = auth.uid()::text);
++
++drop policy if exists "plant_scans_select_own" on storage.objects;
++create policy "plant_scans_select_own" on storage.objects for select to authenticated
++  using (bucket_id = 'plant-scans' and (storage.foldername(name))[1] = auth.uid()::text);
++
++-- upsert:true re-uploads over an existing object, which needs UPDATE as well
++drop policy if exists "plant_scans_update_own" on storage.objects;
++create policy "plant_scans_update_own" on storage.objects for update to authenticated
++  using (bucket_id = 'plant-scans' and (storage.foldername(name))[1] = auth.uid()::text)
++  with check (bucket_id = 'plant-scans' and (storage.foldername(name))[1] = auth.uid()::text);
++
++drop policy if exists "plant_scans_delete_own" on storage.objects;
++create policy "plant_scans_delete_own" on storage.objects for delete to authenticated
++  using (bucket_id = 'plant-scans' and (storage.foldername(name))[1] = auth.uid()::text);
++
++-- Admins can read (and clean up) everything in the bucket
++drop policy if exists "plant_scans_select_admin" on storage.objects;
++create policy "plant_scans_select_admin" on storage.objects for select to authenticated
++  using (bucket_id = 'plant-scans' and public.is_admin());
++
++drop policy if exists "plant_scans_delete_admin" on storage.objects;
++create policy "plant_scans_delete_admin" on storage.objects for delete to authenticated
++  using (bucket_id = 'plant-scans' and public.is_admin());
+-- 
+2.43.0
+

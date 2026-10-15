@@ -1,0 +1,288 @@
+import { Asset } from 'expo-asset';
+import * as FileSystem from 'expo-file-system/legacy';
+import { Skia, ColorType, AlphaType } from '@shopify/react-native-skia';
+import { loadTensorflowModel } from 'react-native-fast-tflite';
+import { prepareScanImage } from './scanImage';
+
+const IMAGE_SIZE = 384;
+const CONFIDENCE_THRESHOLD = 0.65;
+const GREEN_RATIO_THRESHOLD = 0.15;
+const ENTROPY_THRESHOLD = 0.75;
+
+const WEIGHTS = {
+  green: 3.0,
+  confidence: 2.0,
+  entropy: 1.5,
+  edges: 1.0,
+  quality: 0.5,
+};
+const MAX_SCORE =
+  WEIGHTS.green + WEIGHTS.confidence + WEIGHTS.entropy + WEIGHTS.edges + WEIGHTS.quality;
+
+const EDGE_PARTIAL_CREDIT = 0.5;
+const QUALITY_PARTIAL_CREDIT = 0.3;
+
+const OVERALL_SCORE_THRESHOLD = 0.60; // must match app.py's `overall_score >= 0.60`
+const MIN_CONFIDENCE_HARD_REJECT = 0.3;
+
+const CLASS_KEYS = ['CBB', 'CBSD', 'CGM', 'CMD', 'HEALTHY'];
+const CLASS_NAMES = [
+  'Cassava Bacterial Blight (CBB)',
+  'Cassava Brown Streak Disease (CBSD)',
+  'Cassava Green Mottle (CGM)',
+  'Cassava Mosaic Disease (CMD)',
+  'Healthy',
+];
+
+const MODEL_FILENAME = 'rootcare_cassava_convnext_384.tflite';
+const OLD_MODEL_FILENAME = 'rootcare_cassava_model_resnet50v2.tflite';
+const LOCAL_MODEL_PATH = FileSystem.documentDirectory + MODEL_FILENAME;
+
+let _model = null;
+let _loading = null;
+
+export const loadOfflineModel = async () => {
+  if (_model) return _model;
+  if (_loading) return _loading;
+
+  _loading = (async () => {
+    try {
+      FileSystem.deleteAsync(FileSystem.documentDirectory + OLD_MODEL_FILENAME, {
+        idempotent: true,
+      }).catch(() => {});
+
+      const info = await FileSystem.getInfoAsync(LOCAL_MODEL_PATH);
+      if (!info.exists) {
+        console.log('Copying model to documentDirectory...');
+        const asset = Asset.fromModule(
+          require('../assets/rootcare_cassava_convnext_384.tflite')
+        );
+        await asset.downloadAsync();
+        if (!asset.localUri) throw new Error('Asset did not resolve to a local URI');
+
+        // Copy to a temp name, then rename, so a killed app mid-copy
+        // can't leave a half-written file that looks "cached".
+        const tmpPath = LOCAL_MODEL_PATH + '.tmp';
+        await FileSystem.deleteAsync(tmpPath, { idempotent: true });
+        await FileSystem.copyAsync({ from: asset.localUri, to: tmpPath });
+        await FileSystem.moveAsync({ from: tmpPath, to: LOCAL_MODEL_PATH });
+        console.log('Model copied to:', LOCAL_MODEL_PATH);
+      } else {
+        console.log('Model already cached at:', LOCAL_MODEL_PATH);
+      }
+
+      _model = await loadTensorflowModel({ url: LOCAL_MODEL_PATH }, []);
+      console.log('Offline TFLite model loaded');
+      return _model;
+    } catch (e) {
+      console.error('Failed to load TFLite model:', e?.message || String(e));
+      _loading = null;
+      throw e;
+    }
+  })();
+
+  return _loading;
+};
+
+const decodeImageNative = async (uri) => {
+  const data = await Skia.Data.fromURI(uri);
+  const image = Skia.Image.MakeImageFromEncoded(data);
+  if (!image) throw new Error('Skia failed to decode image');
+
+  const width = image.width();
+  const height = image.height();
+
+  const pixels = image.readPixels(0, 0, {
+    width,
+    height,
+    colorType: ColorType.RGBA_8888,
+    alphaType: AlphaType.Unpremul,
+  });
+
+  image.dispose();
+  data.dispose();
+
+  if (!pixels) throw new Error('Skia readPixels returned null');
+  return { data: pixels, width, height };
+};
+
+const buildInputTensor = (rgba) => {
+  const out = new Float32Array(IMAGE_SIZE * IMAGE_SIZE * 3);
+  for (let i = 0, j = 0; i < rgba.length; i += 4, j += 3) {
+    out[j] = rgba[i];
+    out[j + 1] = rgba[i + 1];
+    out[j + 2] = rgba[i + 2];
+  }
+  return out;
+};
+
+const computeGreenRatio = (rgba) => {
+  let green = 0;
+  const total = rgba.length / 4;
+  for (let i = 0; i < rgba.length; i += 4) {
+    const r = rgba[i], g = rgba[i + 1], b = rgba[i + 2];
+    if (g > r && g > b && g > 50) green++;
+  }
+  return green / total;
+};
+
+const computeEntropy = (probs) => {
+  const eps = 1e-7;
+  let H = 0;
+  for (const p of probs) {
+    const q = Math.min(Math.max(p, eps), 1.0);
+    H -= q * Math.log(q);
+  }
+  return H / Math.log(probs.length);
+};
+
+const computeEdgeDensity = (rgba, w, h) => {
+  const gray = new Float32Array(w * h);
+  for (let p = 0; p < w * h; p++) {
+    const i = p * 4;
+    gray[p] = Math.round(rgba[i] * 0.299 + rgba[i + 1] * 0.587 + rgba[i + 2] * 0.114);
+  }
+
+  let count = 0;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const p = y * w + x;
+      let v;
+      if (x === 0 || y === 0 || x === w - 1 || y === h - 1) {
+        v = gray[p];
+      } else {
+        v =
+          -gray[p - w - 1] - gray[p - w] - gray[p - w + 1] +
+          -gray[p - 1] + 8 * gray[p] - gray[p + 1] +
+          -gray[p + w - 1] - gray[p + w] - gray[p + w + 1];
+        v = Math.min(255, Math.max(0, v));
+      }
+      if (v > 30) count++;
+    }
+  }
+  return count / (w * h);
+};
+
+const computeBrightnessContrast = (rgba, w, h) => {
+  let sum = 0, sumSq = 0;
+  const n = w * h;
+  for (let i = 0; i < rgba.length; i += 4) {
+    const r = rgba[i];
+    sum += r;
+    sumSq += r * r;
+  }
+  const mean = sum / n / 255;
+  const variance = sumSq / n - (sum / n) ** 2;
+  const stddev = Math.sqrt(Math.max(variance, 0)) / 255;
+  return { brightness: mean, contrast: stddev };
+};
+
+const normalizeOutput = (raw) => {
+  if (!raw) return [];
+  if (raw instanceof Float32Array) return Array.from(raw);
+  if (raw instanceof ArrayBuffer) return Array.from(new Float32Array(raw));
+  if (Array.isArray(raw)) return raw;
+  try {
+    return Array.from(raw);
+  } catch {
+    return [];
+  }
+};
+
+export const runOfflineInference = async (imageUri) => {
+  const model = await loadOfflineModel();
+
+  const manipulated = await prepareScanImage(imageUri, { centerCrop: false });
+
+  const { data: rgba, width, height } = await decodeImageNative(manipulated.uri);
+
+  if (width !== IMAGE_SIZE || height !== IMAGE_SIZE) {
+    console.warn(`Manipulated image is ${width}x${height}, expected ${IMAGE_SIZE}x${IMAGE_SIZE}`);
+  }
+
+  const input = buildInputTensor(rgba);
+  const inputArrayBuffer = new ArrayBuffer(input.length * 4);
+  const inputView = new Float32Array(inputArrayBuffer);
+  inputView.set(input);
+
+  const rawOutputs = await model.run([inputArrayBuffer]);
+  const probs = normalizeOutput(rawOutputs?.[0]);
+
+  if (!probs.length) {
+    return {
+      success: false,
+      error: 'empty_output',
+      message: 'The model did not return a prediction. Please try another photo.',
+      _offline: true,
+    };
+  }
+
+  const predictedIndex = probs.indexOf(Math.max(...probs));
+  const confidence = probs[predictedIndex] ?? 0;
+
+  const greenRatio = computeGreenRatio(rgba);
+  const entropy = computeEntropy(probs);
+  const edgeDensity = computeEdgeDensity(rgba, width, height);
+  const { brightness, contrast } = computeBrightnessContrast(rgba, width, height);
+
+  const isGreen = greenRatio > GREEN_RATIO_THRESHOLD;
+  const isConfidentPred = confidence > CONFIDENCE_THRESHOLD;
+  const isCertain = entropy < ENTROPY_THRESHOLD;
+  const hasEdges = edgeDensity > 0.02;
+  const hasGoodQuality = brightness > 0.10 && brightness < 0.95 && contrast > 0.05;
+
+  const totalScore =
+    (isGreen ? WEIGHTS.green : 0) +
+    (isConfidentPred ? WEIGHTS.confidence : 0) +
+    (isCertain ? WEIGHTS.entropy : 0) +
+    (hasEdges ? EDGE_PARTIAL_CREDIT * WEIGHTS.edges : 0) +
+    (hasGoodQuality ? QUALITY_PARTIAL_CREDIT * WEIGHTS.quality : 0);
+  const overallScore = totalScore / MAX_SCORE;
+
+  let isCassava = overallScore >= OVERALL_SCORE_THRESHOLD;
+  if (confidence < MIN_CONFIDENCE_HARD_REJECT) isCassava = false;
+
+  const allProbabilities = {};
+  CLASS_KEYS.forEach((k, i) => {
+    allProbabilities[k] = parseFloat(((probs[i] ?? 0) * 100).toFixed(2));
+  });
+
+  const detectionMetrics = {
+    is_green: isGreen,
+    is_confident: isConfidentPred,
+    is_certain: isCertain,
+    has_edges: hasEdges,
+    has_good_quality: hasGoodQuality,
+    overall_score: parseFloat((overallScore * 100).toFixed(2)),
+    entropy: parseFloat((entropy * 100).toFixed(2)),
+    max_confidence: parseFloat(((confidence || 0) * 100).toFixed(2)),
+    green_ratio: parseFloat((greenRatio * 100).toFixed(2)),
+  };
+
+  console.log('Inference probs:', allProbabilities);
+  console.log('Detection metrics:', detectionMetrics);
+
+  if (!isCassava || !Number.isFinite(confidence)) {
+    return {
+      success: false,
+      error: 'not_cassava',
+      message:
+        'This does not appear to be a cassava leaf. Please upload a clear image of a cassava leaf.',
+      detection_metrics: detectionMetrics,
+      confidence: parseFloat(((confidence || 0) * 100).toFixed(2)),
+      allProbabilities,
+      _offline: true,
+    };
+  }
+
+  return {
+    success: true,
+    diseaseKey: CLASS_KEYS[predictedIndex],
+    diseaseName: CLASS_NAMES[predictedIndex],
+    confidence: parseFloat((confidence * 100).toFixed(2)),
+    detection_metrics: detectionMetrics,
+    allProbabilities,
+    preparedImageUri: manipulated.uri,
+    _offline: true,
+  };
+};

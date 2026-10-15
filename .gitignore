@@ -1,1 +1,8 @@
+dist/*.zip
+.env
+.env.*
+.expo/
+*.log
 node_modules
+node_modules/
+*.tflite

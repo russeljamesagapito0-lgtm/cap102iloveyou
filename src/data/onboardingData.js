@@ -1,5 +1,4 @@
-﻿// src/data/onboardingData.js
-export const onboardingData = [
+﻿export const onboardingData = [
   {
     id: '1',
     title: 'RootCare',
@@ -27,7 +26,7 @@ export const onboardingData = [
   {
     id: '5',
     title: 'WE PROVIDE TREATMENT FOR EVERY CASSAVA JUST FOR YOU',
-    // image: require('../assets/FifthSlide.png'), // Uncomment when you have this image
+   
   },
 ];
 

@@ -1,0 +1,438 @@
+diff --git a/admin/src/lib/supabase.js b/admin/src/lib/supabase.js
+index 3fce0e2..9de9e75 100644
+--- a/admin/src/lib/supabase.js
++++ b/admin/src/lib/supabase.js
+@@ -21,4 +21,19 @@ export const logAudit = (action, entity, entityId, details = {}) =>
+     entity,
+     entity_id: entityId ? String(entityId) : null,
+     details,
+-  });
+\ No newline at end of file
++  });
++
++// Supabase caps every response at 1000 rows. Pages through with .range().
++// `build` must return a fresh query each call and order by a unique column
++// (add .order('id')) so rows are not skipped or repeated between pages.
++// `max` is a safety ceiling; pass Infinity for backups.
++export const fetchPages = async (build, { pageSize = 1000, max = 50000 } = {}) => {
++  let rows = [];
++  for (let from = 0; from < max; from += pageSize) {
++    const { data, error } = await build().range(from, from + pageSize - 1);
++    if (error) throw error;
++    rows = rows.concat(data || []);
++    if (!data || data.length < pageSize) break;
++  }
++  return rows;
++};
+diff --git a/admin/src/pages/Analytics.js b/admin/src/pages/Analytics.js
+index 4ee9821..4d3adae 100644
+--- a/admin/src/pages/Analytics.js
++++ b/admin/src/pages/Analytics.js
+@@ -3,7 +3,7 @@ import StatCard from '../components/StatCard';
+ import LineChart from '../components/LineChart';
+ import BarList from '../components/BarList';
+ import { useToast } from '../context/ToastContext';
+-import { supabase } from '../lib/supabase';
++import { supabase, fetchPages } from '../lib/supabase';
+ import {
+   RANGES,
+   sinceFor,
+@@ -39,10 +39,12 @@ export default function Analytics() {
+ 
+   useEffect(() => {
+     Promise.all([
+-      supabase.from('profiles').select('id, full_name, email, region, created_at'),
++      fetchPages(() =>
++        supabase.from('profiles').select('id, full_name, email, region, created_at').order('id')
++      ).catch(() => []),
+       supabase.from('diseases').select('code,name'),
+     ]).then(([p, d]) => {
+-      setProfiles(p.data || []);
++      setProfiles(p);
+       setDiseases(d.data || []);
+     });
+   }, []);
+diff --git a/admin/src/pages/Reports.js b/admin/src/pages/Reports.js
+index 93c91f0..72b3acf 100644
+--- a/admin/src/pages/Reports.js
++++ b/admin/src/pages/Reports.js
+@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
+ import Icon from '../components/Icon';
+ import { useToast } from '../context/ToastContext';
+ import { downloadCsv } from '../lib/csv';
+-import { supabase, fmtDate, logAudit } from '../lib/supabase';
++import { supabase, fmtDate, logAudit, fetchPages } from '../lib/supabase';
+ import { useAuth } from '../context/AuthContext';
+ import {
+   fetchAll,
+@@ -61,10 +61,15 @@ export default function Reports() {
+ 
+   useEffect(() => {
+     Promise.all([
+-      supabase.from('profiles').select('id, full_name, email, region, plan, status, created_at, last_active_at'),
++      fetchPages(() =>
++        supabase
++          .from('profiles')
++          .select('id, full_name, email, region, plan, status, created_at, last_active_at')
++          .order('id')
++      ).catch(() => []),
+       supabase.from('diseases').select('code,name'),
+     ]).then(([p, d]) => {
+-      setProfiles(p.data || []);
++      setProfiles(p);
+       setDiseases(d.data || []);
+     });
+   }, []);
+diff --git a/admin/src/pages/Scans.js b/admin/src/pages/Scans.js
+index 16c3885..e5426c9 100644
+--- a/admin/src/pages/Scans.js
++++ b/admin/src/pages/Scans.js
+@@ -7,9 +7,10 @@ import useAutoRefresh from '../lib/useAutoRefresh';
+ import { useConfirm } from '../components/ConfirmDialog';
+ import { useToast } from '../context/ToastContext';
+ import { downloadCsv } from '../lib/csv';
+-import { supabase, fmtDate, logAudit } from '../lib/supabase';
++import { supabase, fmtDate, logAudit, fetchPages } from '../lib/supabase';
+ 
+ const PAGE_SIZE = 1000;
++const TABLE_MAX = 5000; // newest scans kept in the table; exports are unlimited
+ const LOW_CONFIDENCE = 0.7;
+ 
+ const confidenceClass = (c) => {
+@@ -69,12 +70,20 @@ export default function Scans() {
+   // Silent refetch (no spinner) used by the auto-refresh below
+   const refreshScans = useCallback(async () => {
+     if (!namesRef.current) return; // first load not finished yet
+-    const { data, error } = await supabase
+-      .from('scans')
+-      .select('*, profiles(full_name,email)')
+-      .order('created_at', { ascending: false })
+-      .limit(1000);
+-    if (!error && data) setScans(data.map((s) => buildScanObject(s, namesRef.current)));
++    try {
++      const data = await fetchPages(
++        () =>
++          supabase
++            .from('scans')
++            .select('*, profiles(full_name,email)')
++            .order('created_at', { ascending: false })
++            .order('id', { ascending: false }),
++        { max: TABLE_MAX }
++      );
++      setScans(data.map((s) => buildScanObject(s, namesRef.current)));
++    } catch (e) {
++      // silent refresh: keep the last good list
++    }
+   }, []);
+ 
+   useAutoRefresh(refreshScans, { intervalMs: 10000, table: 'scans' });
+@@ -90,20 +99,27 @@ export default function Scans() {
+       setDiseases(d || []);
+       namesRef.current = names;
+ 
+-      const { data: p } = await supabase
+-        .from('profiles')
+-        .select('id, full_name, email')
+-        .order('full_name', { ascending: true, nullsFirst: false });
++      const p = await fetchPages(() =>
++        supabase
++          .from('profiles')
++          .select('id, full_name, email')
++          .order('full_name', { ascending: true, nullsFirst: false })
++          .order('id')
++      ).catch(() => []);
+ 
+-      setProfiles(p || []);
++      setProfiles(p);
+ 
+-      const { data } = await supabase
+-        .from('scans')
+-        .select('*, profiles(full_name,email)')
+-        .order('created_at', { ascending: false })
+-        .limit(1000);
++      const data = await fetchPages(
++        () =>
++          supabase
++            .from('scans')
++            .select('*, profiles(full_name,email)')
++            .order('created_at', { ascending: false })
++            .order('id', { ascending: false }),
++        { max: TABLE_MAX }
++      ).catch(() => []);
+ 
+-      setScans((data || []).map((s) => buildScanObject(s, names)));
++      setScans(data.map((s) => buildScanObject(s, names)));
+ 
+       if (targetUserId && p) {
+         const match = p.find((row) => row.id === targetUserId);
+@@ -241,6 +257,7 @@ export default function Scans() {
+         .from('scans')
+         .select('*, profiles(email)')
+         .order('created_at', { ascending: false })
++        .order('id', { ascending: false })
+         .range(from, from + PAGE_SIZE - 1);
+ 
+       if (selectedUser?.id) q = q.eq('user_id', selectedUser.id);
+diff --git a/admin/src/pages/Users.js b/admin/src/pages/Users.js
+index 5647aeb..e6c74eb 100644
+--- a/admin/src/pages/Users.js
++++ b/admin/src/pages/Users.js
+@@ -6,9 +6,8 @@ import useAutoRefresh from '../lib/useAutoRefresh';
+ import { useConfirm } from '../components/ConfirmDialog';
+ import { useToast } from '../context/ToastContext';
+ import { downloadCsv } from '../lib/csv';
+-import { supabase, fmtDate, logAudit } from '../lib/supabase';
++import { supabase, fmtDate, logAudit, fetchPages } from '../lib/supabase';
+ 
+-const PAGE_SIZE = 1000;
+ const SCANS_PER_PAGE = 8;
+ 
+ const mapProfile = (p) => ({
+@@ -43,17 +42,6 @@ const buildScan = (s, names) => ({
+   corrected: s.corrected,
+ });
+ 
+-const fetchAll = async (query) => {
+-  let rows = [];
+-  for (let from = 0; ; from += PAGE_SIZE) {
+-    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+-    if (error) throw error;
+-    rows = rows.concat(data);
+-    if (data.length < PAGE_SIZE) break;
+-  }
+-  return rows;
+-};
+-
+ const toUserBackupRows = (profile, scans) => {
+   const rows = [
+     {
+@@ -198,23 +186,34 @@ export default function Users() {
+   const diseaseNamesRef = useRef({});
+ 
+   const refreshAll = useCallback(async () => {
+-    const { data: prof, error: profError } = await supabase
+-      .from('profiles')
+-      .select('*, scans(count)')
+-      .order('created_at', { ascending: false });
+-    if (!profError && prof) setUsers(prof.map(mapProfile));
++    try {
++      const prof = await fetchPages(() =>
++        supabase
++          .from('profiles')
++          .select('*, scans(count)')
++          .order('created_at', { ascending: false })
++          .order('id')
++      );
++      setUsers(prof.map(mapProfile));
++    } catch (e) {
++      // silent refresh: keep the last good list
++    }
+ 
+     const uid = selectedIdRef.current;
+     if (uid) {
+-      const { data, error } = await supabase
+-        .from('scans')
+-        .select('*')
+-        .eq('user_id', uid)
+-        .order('created_at', { ascending: false })
+-        .limit(500);
+-      if (!error && data) {
++      try {
++        const data = await fetchPages(() =>
++          supabase
++            .from('scans')
++            .select('*')
++            .eq('user_id', uid)
++            .order('created_at', { ascending: false })
++            .order('id')
++        );
+         const fresh = data.map((s) => buildScan(s, diseaseNamesRef.current));
+         setScanCache((prev) => ({ ...prev, [uid]: fresh }));
++      } catch (e) {
++        // silent refresh: keep the last good scans
+       }
+     }
+   }, []);
+@@ -222,11 +221,15 @@ export default function Users() {
+   useAutoRefresh(refreshAll, { intervalMs: 10000, table: 'scans' });
+ 
+   useEffect(() => {
+-    supabase
+-      .from('profiles')
+-      .select('*, scans(count)')
+-      .order('created_at', { ascending: false })
+-      .then(({ data }) => setUsers((data || []).map(mapProfile)));
++    fetchPages(() =>
++      supabase
++        .from('profiles')
++        .select('*, scans(count)')
++        .order('created_at', { ascending: false })
++        .order('id')
++    )
++      .then((data) => setUsers(data.map(mapProfile)))
++      .catch(() => setUsers([]));
+ 
+     supabase
+       .from('diseases')
+@@ -262,15 +265,15 @@ export default function Users() {
+     if (!scanCache[u.id]) {
+       setLoadingScans(true);
+       try {
+-        const { data, error } = await supabase
+-          .from('scans')
+-          .select('*')
+-          .eq('user_id', u.id)
+-          .order('created_at', { ascending: false })
+-          .limit(500);
+-
+-        if (error) throw error;
+-        const scans = (data || []).map((s) => buildScan(s, diseaseNames));
++        const data = await fetchPages(() =>
++          supabase
++            .from('scans')
++            .select('*')
++            .eq('user_id', u.id)
++            .order('created_at', { ascending: false })
++            .order('id')
++        );
++        const scans = data.map((s) => buildScan(s, diseaseNames));
+         setScanCache((prev) => ({ ...prev, [u.id]: scans }));
+       } catch (e) {
+         toast.error('Failed to load scans: ' + e.message);
+@@ -361,12 +364,15 @@ export default function Users() {
+         .single();
+       if (pErr) throw pErr;
+ 
+-      const scans = await fetchAll(
+-        supabase
+-          .from('scans')
+-          .select('*')
+-          .eq('user_id', selected.id)
+-          .order('created_at', { ascending: false })
++      const scans = await fetchPages(
++        () =>
++          supabase
++            .from('scans')
++            .select('*')
++            .eq('user_id', selected.id)
++            .order('created_at', { ascending: false })
++            .order('id'),
++        { max: Infinity }
+       );
+ 
+       const rows = toUserBackupRows(profile, scans);
+@@ -397,11 +403,13 @@ export default function Users() {
+ 
+     setBusy(true);
+     try {
+-      const profiles = await fetchAll(
+-        supabase.from('profiles').select('*').order('created_at')
++      const profiles = await fetchPages(
++        () => supabase.from('profiles').select('*').order('created_at').order('id'),
++        { max: Infinity }
+       );
+-      const scans = await fetchAll(
+-        supabase.from('scans').select('*').order('created_at')
++      const scans = await fetchPages(
++        () => supabase.from('scans').select('*').order('created_at').order('id'),
++        { max: Infinity }
+       );
+ 
+       const rows = toGlobalBackupRows(profiles, scans);
+diff --git a/superadmin-changes/src/pages/Users.js b/superadmin-changes/src/pages/Users.js
+index 423588e..359bfd4 100644
+--- a/superadmin-changes/src/pages/Users.js
++++ b/superadmin-changes/src/pages/Users.js
+@@ -3,9 +3,8 @@ import Modal from '../components/Modal';
+ import { useConfirm } from '../components/ConfirmDialog';
+ import { useToast } from '../context/ToastContext';
+ import { downloadCsv } from '../lib/csv';
+-import { supabase, fmtDate, logAudit } from '../lib/supabase';
++import { supabase, fmtDate, logAudit, fetchPages } from '../lib/supabase';
+ 
+-const PAGE_SIZE = 1000;
+ 
+ const mapProfile = (p) => ({
+   id: p.id,
+@@ -19,17 +18,6 @@ const mapProfile = (p) => ({
+ const statusClass = (status) =>
+   'status-text ' + (status === 'active' ? 'status-active' : 'status-suspended');
+ 
+-const fetchAll = async (query) => {
+-  let rows = [];
+-  for (let from = 0; ; from += PAGE_SIZE) {
+-    const { data, error } = await query.range(from, from + PAGE_SIZE - 1);
+-    if (error) throw error;
+-    rows = rows.concat(data);
+-    if (data.length < PAGE_SIZE) break;
+-  }
+-  return rows;
+-};
+-
+ const toUserBackupRows = (profile, scans) => {
+   const rows = [
+     {
+@@ -161,12 +149,16 @@ export default function Users() {
+   const toast = useToast();
+ 
+   useEffect(() => {
+-    supabase
+-      .from('profiles')
+-      .select('*, scans(count)')
+-      .eq('role', 'user')
+-      .order('created_at', { ascending: false })
+-      .then(({ data }) => setUsers((data || []).map(mapProfile)));
++    fetchPages(() =>
++      supabase
++        .from('profiles')
++        .select('*, scans(count)')
++        .eq('role', 'user')
++        .order('created_at', { ascending: false })
++        .order('id')
++    )
++      .then((data) => setUsers(data.map(mapProfile)))
++      .catch(() => setUsers([]));
+   }, []);
+ 
+   const activeCount = users.filter((u) => u.status === 'active').length;
+@@ -258,12 +250,15 @@ export default function Users() {
+         .single();
+       if (pErr) throw pErr;
+ 
+-      const scans = await fetchAll(
+-        supabase
+-          .from('scans')
+-          .select('*')
+-          .eq('user_id', selected.id)
+-          .order('created_at', { ascending: false })
++      const scans = await fetchPages(
++        () =>
++          supabase
++            .from('scans')
++            .select('*')
++            .eq('user_id', selected.id)
++            .order('created_at', { ascending: false })
++            .order('id'),
++        { max: Infinity }
+       );
+ 
+       const rows = toUserBackupRows(profile, scans);
+@@ -294,11 +289,14 @@ export default function Users() {
+ 
+     setBusy(true);
+     try {
+-      const profiles = await fetchAll(
+-        supabase.from('profiles').select('*').eq('role', 'user').order('created_at')
++      const profiles = await fetchPages(
++        () =>
++          supabase.from('profiles').select('*').eq('role', 'user').order('created_at').order('id'),
++        { max: Infinity }
+       );
+-      const scans = await fetchAll(
+-        supabase.from('scans').select('*').order('created_at')
++      const scans = await fetchPages(
++        () => supabase.from('scans').select('*').order('created_at').order('id'),
++        { max: Infinity }
+       );
+ 
+       const rows = toGlobalBackupRows(profiles, scans);
