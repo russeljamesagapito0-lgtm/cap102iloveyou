@@ -1,5 +1,5 @@
 ﻿import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, Image, StyleSheet, TouchableOpacity, ScrollView, Modal, Platform, Dimensions, BackHandler, StatusBar, Alert,} from 'react-native';
+import { View, Text, Image, StyleSheet, TouchableOpacity, ScrollView, Modal, Platform, Dimensions, BackHandler, StatusBar, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -105,7 +105,10 @@ const ResultScreen = ({ route, navigation }) => {
   const hasTreatment = !!diseaseData.treatment;
   const hasPrevention = !!diseaseData.prevention;
   const hasSymptoms = !!diseaseData.symptoms;
-  const hasAnySection = hasDescription || hasTreatment || hasPrevention || hasSymptoms;
+
+  const hasAnySection = isHealthyResult
+    ? (hasDescription || hasPrevention)
+    : (hasDescription || hasTreatment || hasPrevention || hasSymptoms);
 
   const saveResult = async () => {
     if (readOnly) return true;
@@ -130,7 +133,6 @@ const ResultScreen = ({ route, navigation }) => {
 
       if (!scanIdRef.current) scanIdRef.current = generateScanId();
 
-      // Determine the canonical code to store.
       const canonicalCode = (() => {
         if (isHealthyResult) return 'healthy';
         if (diseaseKey && DISEASE_INFO[diseaseKey]) return diseaseKey;
@@ -281,7 +283,7 @@ const ResultScreen = ({ route, navigation }) => {
             </View>
           )}
 
-          {hasTreatment && (
+          {!isHealthyResult && hasTreatment && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Ionicons name="medkit-outline" size={18} color={themeColors.secondary} />
@@ -296,8 +298,10 @@ const ResultScreen = ({ route, navigation }) => {
           {hasPrevention && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
-                <Ionicons name="shield-checkmark-outline" size={18} color={themeColors.secondary} />
-                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Prevention</Text>
+                <Ionicons name={isHealthyResult ? 'bulb-outline' : 'shield-checkmark-outline'} size={18} color={themeColors.secondary} />
+                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>
+                  {isHealthyResult ? 'Care Tips' : 'Prevention'}
+                </Text>
               </View>
               <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>
                 {diseaseData.prevention}
@@ -305,7 +309,7 @@ const ResultScreen = ({ route, navigation }) => {
             </View>
           )}
 
-          {hasSymptoms && (
+          {!isHealthyResult && hasSymptoms && (
             <View style={styles.section}>
               <View style={styles.sectionHeader}>
                 <Ionicons name="eye-outline" size={18} color={themeColors.secondary} />
