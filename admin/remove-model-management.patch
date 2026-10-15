@@ -1,0 +1,227 @@
+diff --git a/src/App.js b/src/App.js
+index 503670f..1cc2697 100644
+--- a/src/App.js
++++ b/src/App.js
+@@ -5,7 +5,6 @@ import Dashboard from './pages/Dashboard';
+ import Users from './pages/Users';
+ import Scans from './pages/Scans';
+ import Maintenance from './pages/Maintenance';
+-import Models from './pages/Models';
+ import Analytics from './pages/Analytics';
+ import Reports from './pages/Reports';
+ 
+@@ -15,7 +14,6 @@ const protectedRoutes = [
+   { path: '/scans', element: <Scans /> },
+   { path: '/analytics', element: <Analytics /> },
+   { path: '/reports', element: <Reports /> },
+-  { path: '/models', element: <Models /> },
+   { path: '/maintenance', element: <Maintenance /> },
+   { path: '/audit', element: <Navigate to="/maintenance?tab=audit" replace /> },
+ ];
+diff --git a/src/components/Icon.js b/src/components/Icon.js
+index 843423e..0f65831 100644
+--- a/src/components/Icon.js
++++ b/src/components/Icon.js
+@@ -65,13 +65,6 @@ const ICONS = {
+       <line x1="12" y1="15" x2="12" y2="3" />
+     </>
+   ),
+-  models: (
+-    <>
+-      <rect x="4" y="4" width="16" height="16" rx="2" />
+-      <rect x="9" y="9" width="6" height="6" />
+-      <path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3" />
+-    </>
+-  ),
+   maintenance: (
+     <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z" />
+   ),
+diff --git a/src/components/Sidebar.js b/src/components/Sidebar.js
+index 90ad651..d07df05 100644
+--- a/src/components/Sidebar.js
++++ b/src/components/Sidebar.js
+@@ -18,7 +18,6 @@ const SECTIONS = [
+   {
+     title: 'Utilities',
+     links: [
+-      { to: '/models',      label: 'Models',      icon: 'models' },
+       { to: '/maintenance', label: 'Maintenance', icon: 'maintenance' },
+     ],
+   },
+diff --git a/src/components/Topbar.js b/src/components/Topbar.js
+index 9eb5e78..ce16d1e 100644
+--- a/src/components/Topbar.js
++++ b/src/components/Topbar.js
+@@ -6,7 +6,6 @@ const PAGE_TITLES = {
+   '/':      'Dashboard',
+   '/users': 'Users',
+   '/scans': 'Scans',
+-  '/models': 'Model Management',
+   '/analytics': 'Analytics',
+   '/reports': 'Reports',
+   '/feedback': 'Feedback',
+diff --git a/src/lib/appSettings.js b/src/lib/appSettings.js
+index 86d7693..7281f8b 100644
+--- a/src/lib/appSettings.js
++++ b/src/lib/appSettings.js
+@@ -6,28 +6,6 @@ export const DEFAULT_MAINTENANCE = {
+   eta: null,
+ };
+ 
+-// Hardcoded for now. Add an entry here to make it show up on the Models page.
+-export const MODELS = [
+-  {
+-    id: 'convnext_384',
+-    name: 'ConvNeXt-384',
+-    file: 'rootcare_cassava_convnext_384.tflite',
+-    input: '384 × 384',
+-    classes: 5,
+-    notes: 'Current production model (online + offline).',
+-  },
+-  {
+-    id: 'resnet50v2_224',
+-    name: 'ResNet50V2-224',
+-    file: 'rootcare_cassava_model_resnet50v2.tflite',
+-    input: '224 × 224',
+-    classes: 5,
+-    notes: 'Previous model. Kept as a fallback.',
+-  },
+-];
+-
+-export const DEFAULT_MODEL_ID = MODELS[0].id;
+-
+ export async function getSetting(key) {
+   const { data, error } = await supabase
+     .from('app_settings')
+diff --git a/src/pages/Models.js b/src/pages/Models.js
+deleted file mode 100644
+index 464824e..0000000
+--- a/src/pages/Models.js
++++ /dev/null
+@@ -1,125 +0,0 @@
+-import { useEffect, useState } from 'react';
+-import PageHeader from '../components/PageHeader';
+-import Badge from '../components/Badge';
+-import { useConfirm } from '../components/ConfirmDialog';
+-import { useToast } from '../context/ToastContext';
+-import { fmtDate } from '../lib/supabase';
+-import {
+-  MODELS,
+-  DEFAULT_MODEL_ID,
+-  getSetting,
+-  saveSetting,
+-  auditSetting,
+-} from '../lib/appSettings';
+-
+-export default function Models() {
+-  const confirm = useConfirm();
+-  const toast = useToast();
+-
+-  const [loading, setLoading] = useState(true);
+-  const [busyId, setBusyId] = useState(null);
+-  const [activeId, setActiveId] = useState(DEFAULT_MODEL_ID);
+-  const [updatedAt, setUpdatedAt] = useState(null);
+-
+-  useEffect(() => {
+-    getSetting('active_model')
+-      .then((row) => {
+-        const id = row?.value?.id;
+-        if (MODELS.some((m) => m.id === id)) setActiveId(id);
+-        setUpdatedAt(row?.updated_at || null);
+-      })
+-      .catch((e) => toast.error(`Could not load active model: ${e.message}`))
+-      .finally(() => setLoading(false));
+-    
+-  }, []);
+-
+-  const activate = async (model) => {
+-    if (model.id === activeId) return;
+-
+-    const ok = await confirm({
+-      title: `Switch to ${model.name}?`,
+-      message:
+-        'This changes which model the app is set to use. Make sure the model file is deployed on the backend and bundled in the app build before switching.',
+-      confirmText: 'Switch model',
+-    });
+-    if (!ok) return;
+-
+-    setBusyId(model.id);
+-    try {
+-      await saveSetting('active_model', { id: model.id });
+-      await auditSetting('model.switch', { from: activeId, to: model.id });
+-      setActiveId(model.id);
+-      setUpdatedAt(new Date().toISOString());
+-      toast.success(`Active model: ${model.name}`);
+-    } catch (e) {
+-      toast.error(`Switch failed: ${e.message}`);
+-    } finally {
+-      setBusyId(null);
+-    }
+-  };
+-
+-  if (loading) {
+-    return (
+-      <>
+-        <PageHeader title="Model Management" />
+-        <div className="stack-lg">
+-          <p className="text-muted">Loading…</p>
+-        </div>
+-      </>
+-    );
+-  }
+-
+-  return (
+-    <>
+-      <PageHeader
+-        title="Model Management"
+-        subtitle={`Last changed: ${fmtDate(updatedAt)}`}
+-      />
+-
+-      <div className="stack-lg">
+-        <div className="grid-2">
+-          {MODELS.map((m) => {
+-            const active = m.id === activeId;
+-            return (
+-              <div
+-                key={m.id}
+-                className="card"
+-                style={active ? { borderColor: 'var(--primary)' } : undefined}
+-              >
+-                <div className="flex-between" style={{ marginBottom: 12 }}>
+-                  <div className="card-title" style={{ marginBottom: 0 }}>
+-                    {m.name}
+-                  </div>
+-                  <Badge color={active ? 'green' : 'gray'}>
+-                    {active ? 'Active' : 'Inactive'}
+-                  </Badge>
+-                </div>
+-
+-                <p className="text-muted" style={{ fontSize: 13, marginBottom: 12 }}>
+-                  {m.notes}
+-                </p>
+-
+-                <dl style={{ fontSize: 13, display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '6px 16px', marginBottom: 16 }}>
+-                  <dt className="text-muted">File</dt>
+-                  <dd style={{ wordBreak: 'break-all' }}>{m.file}</dd>
+-                  <dt className="text-muted">Input</dt>
+-                  <dd>{m.input}</dd>
+-                  <dt className="text-muted">Classes</dt>
+-                  <dd>{m.classes}</dd>
+-                </dl>
+-
+-                <button
+-                  className={active ? 'btn btn-outline btn-full' : 'btn btn-primary btn-full'}
+-                  disabled={active || busyId !== null}
+-                  onClick={() => activate(m)}
+-                >
+-                  {active ? 'Currently in use' : busyId === m.id ? 'Switching…' : 'Use this model'}
+-                </button>
+-              </div>
+-            );
+-          })}
+-        </div>
+-      </div>
+-    </>
+-  );
+-}
+\ No newline at end of file
