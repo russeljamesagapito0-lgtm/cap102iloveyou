@@ -23,6 +23,7 @@ import { SUSPENDED_TITLE, SUSPENDED_MESSAGE } from '../utils/accountStatus';
 import { useTheme } from '../context/ThemeContext';
 import SelectField from '../components/SelectField';
 import { fetchRegions, fetchProvinces, fetchRegionCities, fetchProvinceCities, fetchBarangays } from '../utils/psgcClient';
+import GoogleLogo from '../components/GoogleLogo';
 
 const SUFFIX_OPTIONS = ['', 'Jr.', 'Sr.', 'I', 'II', 'III', 'IV', 'V'];
 
@@ -361,7 +362,6 @@ const RegisterScreen = ({ navigation }) => {
     setFieldErrors(prev => { const n = { ...prev }; delete n.region; delete n.province; delete n.city; delete n.barangay; return n; });
     const provinces = await load('provinces', () => fetchProvinces(region.code));
     if (provinces.length === 0) {
-      // No provinces: use the region name as the province value and load its cities directly.
       setFormData(prev => ({ ...prev, province: region.name }));
       await load('cities', () => fetchRegionCities(region.code));
     }
@@ -458,8 +458,7 @@ const RegisterScreen = ({ navigation }) => {
       const birthDate = formData.year && formData.month && formData.day
         ? `${formData.year}-${formData.month.padStart(2, '0')}-${formData.day.padStart(2, '0')}`
         : null;
-      // Profile fields. The row is written AFTER the email code is verified (see VerifyEmailScreen),
-      // because with email confirmation on there is no session yet and RLS would reject the insert.
+
       const profile = {
         display_name: `${formData.firstName} ${formData.lastName}`.trim(),
         first_name: formData.firstName,
@@ -474,7 +473,6 @@ const RegisterScreen = ({ navigation }) => {
 
       const { data: authData, error: authError } = await supabase.auth.signUp({
         email, password: formData.password,
-        // Kept in user_metadata so the profile can still be created if the app is closed mid-verification.
         options: { data: { profile } },
       });
       if (authError) {
@@ -485,7 +483,6 @@ const RegisterScreen = ({ navigation }) => {
         showModal('Error', message, 'error');
         return;
       }
-      // With email confirmation on, Supabase hides "already registered" by returning a user with no identities.
       if (authData.user && Array.isArray(authData.user.identities) && authData.user.identities.length === 0) {
         Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
         showModal('Error', 'This email is already registered. Please login instead.', 'error');
@@ -815,7 +812,7 @@ const RegisterScreen = ({ navigation }) => {
                 <ActivityIndicator size="small" color={themeColors.primary} />
               ) : (
                 <>
-                  <View style={styles.googleIcon}><Text style={styles.googleIconText}>G</Text></View>
+                  <GoogleLogo size={20} />
                   <Text style={[styles.googleButtonText, { color: themeColors.text }]}>Sign up with Google</Text>
                 </>
               )}
