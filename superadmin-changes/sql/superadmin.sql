@@ -53,3 +53,13 @@ create policy a_ins on public.audit_log for insert
 
 -- 5. Create the one superadmin: add the user in Authentication -> Users, then run (replace email):
 -- update public.profiles set role = 'superadmin' where email = 'superadmin@example.com';
+
+-- 6. Revoke every session of a user (called by manage-admins on suspend and password reset).
+--    admin.signOut() takes a JWT, not a user id, so sessions are cleared here instead.
+--    Deleting auth.sessions also deletes the refresh tokens (cascade). service_role only.
+create or replace function public.revoke_user_sessions(uid uuid) returns void
+language sql security definer set search_path = '' as $$
+  delete from auth.sessions where user_id = uid;
+$$;
+revoke all on function public.revoke_user_sessions(uuid) from public, anon, authenticated;
+grant execute on function public.revoke_user_sessions(uuid) to service_role;

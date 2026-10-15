@@ -77,10 +77,28 @@ Deno.serve(async (req) => {
     if (error) return json({ error: error.message }, 400)
 
     await sb.from('profiles').update({ status: suspend ? 'suspended' : 'active' }).eq('id', id)
-    if (suspend) await sb.auth.admin.signOut(id, 'global') // revoke refresh tokens
+    if (suspend) await sb.rpc('revoke_user_sessions', { uid: id }) // revoke refresh tokens
 
     await audit(`admin.${action}`, id, { email: target.email })
     return json({ ok: true })
+  }
+
+  // 5. Reset an admin's password (active or suspended admins)
+  if (action === 'reset_password') {
+    const { id } = body
+    const password = String(body.password ?? '')
+    if (!id) return json({ error: 'Missing id' }, 400)
+    if (password.length < 8) return json({ error: 'Password must be at least 8 characters' }, 400)
+
+    const { data: target } = await sb.from('profiles').select('role,email').eq('id', id).maybeSingle()
+    if (target?.role !== 'admin') return json({ error: 'Target is not an admin account' }, 400)
+
+    const { error } = await sb.auth.admin.updateUserById(id, { password })
+    if (error) return json({ error: error.message }, 400)
+
+    const { error: rErr } = await sb.rpc('revoke_user_sessions', { uid: id }) // force re-login
+    await audit('admin.reset_password', id, { email: target.email, sessions_revoked: !rErr })
+    return json({ ok: true, sessions_revoked: !rErr })
   }
 
   return json({ error: 'Unknown action' }, 400)
