@@ -1,0 +1,117 @@
+diff --git a/.github/workflows/weekly-backup.yml b/.github/workflows/weekly-backup.yml
+new file mode 100644
+index 0000000..4d733e3
+--- /dev/null
++++ b/.github/workflows/weekly-backup.yml
+@@ -0,0 +1,40 @@
++name: Weekly Supabase backup
++
++on:
++  schedule:
++    - cron: "0 18 * * 0" # Sunday 18:00 UTC = Monday 02:00 PH
++  workflow_dispatch:
++
++permissions:
++  contents: read
++
++jobs:
++  backup:
++    runs-on: ubuntu-latest
++    timeout-minutes: 20
++    env:
++      PG_VERSION: "17" # match your Supabase Postgres major version
++    steps:
++      - uses: actions/checkout@v4
++
++      - name: Install matching pg_dump
++        run: |
++          sudo install -d /usr/share/postgresql-common/pgdg
++          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc https://www.postgresql.org/media/keys/ACCC4CF8.asc
++          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" | sudo tee /etc/apt/sources.list.d/pgdg.list
++          sudo apt-get update -q
++          sudo apt-get install -y -q postgresql-client-${PG_VERSION}
++          echo "/usr/lib/postgresql/${PG_VERSION}/bin" >> "$GITHUB_PATH"
++
++      - name: Run backup
++        env:
++          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
++          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
++        run: ./scripts/backup.sh
++
++      - uses: actions/upload-artifact@v4
++        with:
++          name: rootcare-backup-${{ github.run_id }}
++          path: backups/*.gpg
++          retention-days: 90
++          if-no-files-found: error
+diff --git a/.gitignore b/.gitignore
+index 6ed48a9..175eab5 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -1,2 +1,3 @@
+ .env
+ node_modules
++backups
+diff --git a/scripts/RESTORE.md b/scripts/RESTORE.md
+new file mode 100644
+index 0000000..12c499e
+--- /dev/null
++++ b/scripts/RESTORE.md
+@@ -0,0 +1,16 @@
++# Backup and restore
++
++Weekly job: `.github/workflows/weekly-backup.yml` (Mondays 02:00 PH, also runnable by hand from the Actions tab).
++Output: encrypted `.tar.gz.gpg` artifact, kept 90 days.
++
++Repo secrets needed:
++- `SUPABASE_DB_URL`: Supabase > Connect > Session pooler URI (runners are IPv4 only, the direct URI is IPv6)
++- `BACKUP_PASSPHRASE`: long random string, also store it in your password manager
++
++Restore:
++```
++gpg -d rootcare-backup-YYYY-MM-DD.tar.gz.gpg | tar -xzf -
++psql "$NEW_DB_URL" -f rootcare-backup-YYYY-MM-DD-auth-users.sql
++psql "$NEW_DB_URL" -f rootcare-backup-YYYY-MM-DD-public.sql
++```
++Try a restore on a scratch Supabase project once so you know it works.
+diff --git a/scripts/backup.sh b/scripts/backup.sh
+new file mode 100755
+index 0000000..a453827
+--- /dev/null
++++ b/scripts/backup.sh
+@@ -0,0 +1,35 @@
++#!/usr/bin/env bash
++# Weekly Supabase backup. Needs SUPABASE_DB_URL and BACKUP_PASSPHRASE.
++set -euo pipefail
++
++: "${SUPABASE_DB_URL:?SUPABASE_DB_URL is not set}"
++: "${BACKUP_PASSPHRASE:?BACKUP_PASSPHRASE is not set}"
++
++OUT_DIR="${OUT_DIR:-backups}"
++STAMP="$(date -u +%Y-%m-%d)"
++NAME="rootcare-backup-${STAMP}"
++mkdir -p "$OUT_DIR"
++
++# public schema (tables, policies, functions, data)
++pg_dump "$SUPABASE_DB_URL" --schema=public --no-owner --no-privileges \
++  --file="$OUT_DIR/${NAME}-public.sql"
++
++# auth.users, needed to restore profiles (FK to auth.users)
++pg_dump "$SUPABASE_DB_URL" --table=auth.users --data-only --column-inserts \
++  --no-owner --no-privileges --file="$OUT_DIR/${NAME}-auth-users.sql"
++
++# sanity check: refuse to ship an empty dump
++grep -q "CREATE TABLE public.scans" "$OUT_DIR/${NAME}-public.sql" \
++  || { echo "Dump looks empty, aborting" >&2; exit 1; }
++
++tar -C "$OUT_DIR" -czf "$OUT_DIR/${NAME}.tar.gz" \
++  "${NAME}-public.sql" "${NAME}-auth-users.sql"
++
++gpg --batch --yes --pinentry-mode loopback --symmetric --cipher-algo AES256 \
++  --passphrase "$BACKUP_PASSPHRASE" \
++  --output "$OUT_DIR/${NAME}.tar.gz.gpg" "$OUT_DIR/${NAME}.tar.gz"
++
++# plaintext never leaves the runner
++rm -f "$OUT_DIR/${NAME}-public.sql" "$OUT_DIR/${NAME}-auth-users.sql" "$OUT_DIR/${NAME}.tar.gz"
++
++ls -lh "$OUT_DIR"

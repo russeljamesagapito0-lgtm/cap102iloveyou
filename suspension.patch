@@ -1,0 +1,230 @@
+diff --git a/App.js b/App.js
+index a0f7cfd..00b9caa 100644
+--- a/App.js
++++ b/App.js
+@@ -1,7 +1,7 @@
+ ﻿import { Buffer } from 'buffer';
+ global.Buffer = global.Buffer || Buffer;
+ import React, { useState, useEffect } from 'react';
+-import { NavigationContainer, DefaultTheme as NavDefaultTheme, DarkTheme as NavDarkTheme } from '@react-navigation/native';
++import { NavigationContainer, CommonActions, createNavigationContainerRef, DefaultTheme as NavDefaultTheme, DarkTheme as NavDarkTheme } from '@react-navigation/native';
+ import { createStackNavigator } from '@react-navigation/stack';
+ import { View, ActivityIndicator, AppState } from 'react-native';
+ import Toast from 'react-native-toast-message';
+@@ -22,10 +22,14 @@ import { fetchMaintenance, DEFAULT_MAINTENANCE } from './src/utils/appConfig';
+ 
+ import { loadOfflineModel } from './src/utils/offlineInference';
+ import { flushQueue } from './src/utils/syncManager';
++import { fetchAccountStatus } from './src/utils/accountStatus';
+ 
+ const Stack = createStackNavigator();
+ 
+ const MAINTENANCE_POLL_MS = 30 * 1000;
++const SUSPENSION_POLL_MS = 60 * 1000;
++
++const navigationRef = createNavigationContainerRef();
+ 
+ const AppNavigator = () => {
+   const { themeColors, isDarkMode, isLoading: themeLoading } = useTheme();
+@@ -82,6 +86,46 @@ const AppNavigator = () => {
+     };
+   }, []);
+ 
++  // Suspended while already logged in (or opening the app with a saved session):
++  // sign out and send them to Login, which shows the suspension notice.
++  // Network errors fail open so offline use keeps working; the login screen
++  // itself fails closed.
++  const enforceSuspension = React.useCallback(async () => {
++    try {
++      const { data: { session } } = await supabase.auth.getSession();
++      if (!session?.user) return;
++      // The Login screen runs its own check right after sign-in.
++      const route = navigationRef.isReady() ? navigationRef.getCurrentRoute()?.name : null;
++      if (route === 'Login' || route === 'Onboarding') return;
++
++      const status = await fetchAccountStatus(session.user.id);
++      if (status !== 'suspended') return;
++
++      await supabase.auth.signOut().catch(() => {});
++      setIsAuthenticated(false);
++      if (navigationRef.isReady()) {
++        navigationRef.dispatch(
++          CommonActions.reset({ index: 0, routes: [{ name: 'Login', params: { suspended: true } }] })
++        );
++      }
++    } catch (e) {
++      console.warn('Suspension check failed:', e?.message);
++    }
++  }, []);
++
++  useEffect(() => {
++    if (!isAuthenticated) return;
++    enforceSuspension();
++    const interval = setInterval(enforceSuspension, SUSPENSION_POLL_MS);
++    const sub = AppState.addEventListener('change', (st) => {
++      if (st === 'active') enforceSuspension();
++    });
++    return () => {
++      clearInterval(interval);
++      sub.remove();
++    };
++  }, [isAuthenticated, enforceSuspension]);
++
+   useEffect(() => {
+     loadOfflineModel()
+       .then(() => console.log('Offline TFLite model ready'))
+@@ -163,7 +207,7 @@ const AppNavigator = () => {
+   };
+ 
+   return (
+-    <NavigationContainer theme={navigationTheme}>
++    <NavigationContainer ref={navigationRef} theme={navigationTheme}>
+       <Stack.Navigator
+         screenOptions={{ headerShown: false }}
+         initialRouteName={isAuthenticated ? 'MainTabs' : 'Onboarding'}
+diff --git a/src/screens/LoginScreen.js b/src/screens/LoginScreen.js
+index a634fdc..172d0ee 100644
+--- a/src/screens/LoginScreen.js
++++ b/src/screens/LoginScreen.js
+@@ -1,5 +1,5 @@
+ // screens/LoginScreen.js
+-import React, { useState } from 'react';
++import React, { useState, useEffect } from 'react';
+ import {
+   View, Text, TextInput, TouchableOpacity, StyleSheet, Platform,  
+   KeyboardAvoidingView, ScrollView, ActivityIndicator, Image, Modal,
+@@ -9,12 +9,14 @@ import { Ionicons } from '@expo/vector-icons';
+ import * as Haptics from 'expo-haptics';
+ import { supabase } from '../utils/supabaseClient';
+ import { useTheme } from '../context/ThemeContext';
++import { fetchAccountStatus, SUSPENDED_TITLE, SUSPENDED_MESSAGE } from '../utils/accountStatus';
+ 
+ const CustomModal = ({ visible, onClose, title, message, type = 'success', onConfirm, themeColors }) => {
+   const getIcon = () => {
+     switch (type) {
+       case 'success': return { name: 'checkmark-circle', color: '#27AE60' };
+       case 'error': return { name: 'alert-circle', color: themeColors.error };
++      case 'suspended': return { name: 'ban', color: themeColors.error };
+       case 'warning': return { name: 'warning', color: '#F39C12' };
+       default: return { name: 'information-circle', color: themeColors.primary };
+     }
+@@ -36,9 +38,9 @@ const CustomModal = ({ visible, onClose, title, message, type = 'success', onCon
+           <Text style={[styles.modalTitle, { color: themeColors.text }]}>{title}</Text>
+           <Text style={[styles.modalMessage, { color: themeColors.textSecondary }]}>{message}</Text>
+           <View style={styles.modalButtonContainer}>
+-            {type === 'success' ? (
++            {type === 'success' || type === 'suspended' ? (
+               <TouchableOpacity style={[styles.modalButton, { backgroundColor: themeColors.primary }]} onPress={handleActionPress} activeOpacity={0.8}>
+-                <Text style={[styles.modalButtonText, { color: themeColors['on-primary'] }]}>Continue</Text>
++                <Text style={[styles.modalButtonText, { color: themeColors['on-primary'] }]}>{type === 'suspended' ? 'OK' : 'Continue'}</Text>
+               </TouchableOpacity>
+             ) : (
+               <>
+@@ -57,7 +59,7 @@ const CustomModal = ({ visible, onClose, title, message, type = 'success', onCon
+   );
+ };
+ 
+-const LoginScreen = ({ navigation }) => {
++const LoginScreen = ({ navigation, route }) => {
+   const { themeColors, isDarkMode } = useTheme();
+   const [email, setEmail] = useState('');
+   const [password, setPassword] = useState('');
+@@ -77,6 +79,15 @@ const LoginScreen = ({ navigation }) => {
+   };
+   const closeModal = () => setModalVisible(false);
+ 
++  // App.js sends suspended users back here (e.g. suspended while already logged in).
++  useEffect(() => {
++    if (route?.params?.suspended) {
++      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
++      showModal(SUSPENDED_TITLE, SUSPENDED_MESSAGE, 'suspended');
++      navigation.setParams({ suspended: false });
++    }
++  }, [route?.params?.suspended]);
++
+   const handleLogin = async () => {
+     if (!email || !password) {
+       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+@@ -120,6 +131,18 @@ const LoginScreen = ({ navigation }) => {
+         return showModal('Error', message, 'error');
+       }
+ 
++      // Suspension check: an admin sets profiles.status = 'suspended'.
++      // Sign the user straight back out so they never reach the app.
++      const accountStatus = await fetchAccountStatus(data.user.id);
++      if (accountStatus !== 'active') {
++        await supabase.auth.signOut().catch(() => {});
++        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
++        if (accountStatus === 'suspended') {
++          return showModal(SUSPENDED_TITLE, SUSPENDED_MESSAGE, 'suspended');
++        }
++        return showModal('Error', "We couldn't verify your account right now. Please try again.", 'error');
++      }
++
+       // ============================================================
+       // TODO: replace with real deactivation check once backend is ready:
+       //
+diff --git a/src/utils/accountStatus.js b/src/utils/accountStatus.js
+new file mode 100644
+index 0000000..1970dac
+--- /dev/null
++++ b/src/utils/accountStatus.js
+@@ -0,0 +1,29 @@
++// src/utils/accountStatus.js
++// Reads profiles.status ('active' | 'suspended') for the signed-in user.
++// Admins set this from the admin panel (Users -> Suspend user).
++import { supabase } from './supabaseClient';
++
++export const SUSPENDED_TITLE = 'Account Suspended';
++export const SUSPENDED_MESSAGE =
++  'Your account has been suspended by an administrator, so you can’t log in right now. ' +
++  'If you think this is a mistake, please contact RootCare support.';
++
++/**
++ * Returns 'active' | 'suspended', or null if the status couldn't be checked
++ * (network/RLS error). Callers decide whether to fail open or closed.
++ */
++export const fetchAccountStatus = async (userId) => {
++  if (!userId) return null;
++  try {
++    const { data, error } = await supabase
++      .from('profiles')
++      .select('status')
++      .eq('id', userId)
++      .maybeSingle();
++    if (error) return null;
++    // No profile row (or no status) = nothing to suspend.
++    return data?.status === 'suspended' ? 'suspended' : 'active';
++  } catch (_) {
++    return null;
++  }
++};
+diff --git a/supabase/sql/suspended_users.sql b/supabase/sql/suspended_users.sql
+new file mode 100644
+index 0000000..77dcb5a
+--- /dev/null
++++ b/supabase/sql/suspended_users.sql
+@@ -0,0 +1,23 @@
++-- Server-side enforcement for suspended accounts.
++-- The app signs suspended users out, but a token that was already issued stays valid
++-- until it expires, so block writes in the database too. Run once in the SQL editor.
++
++create or replace function public.is_account_active() returns boolean
++language sql stable security definer set search_path = public as $$
++  select coalesce((select status = 'active' from public.profiles where id = auth.uid()), true);
++$$;
++
++-- scans: suspended users can't add or edit scans
++drop policy if exists s_ins on public.scans;
++create policy s_ins on public.scans for insert
++  with check (user_id = auth.uid() and public.is_account_active());
++
++drop policy if exists s_own_upd on public.scans;
++create policy s_own_upd on public.scans for update
++  using (user_id = auth.uid() and public.is_account_active())
++  with check (user_id = auth.uid() and public.is_account_active());
++
++-- feedback: suspended users can't submit
++drop policy if exists f_ins on public.feedback;
++create policy f_ins on public.feedback for insert
++  with check (user_id = auth.uid() and public.is_account_active());

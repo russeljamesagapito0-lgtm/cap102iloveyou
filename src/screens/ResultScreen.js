@@ -1,39 +1,16 @@
-﻿// screens/ResultScreen.js - Fixed with ref+state pattern (Bottom Bar Removed)
-import React, { useState, useEffect, useRef } from 'react';
-import {
-  View,
-  Text,
-  Image,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-  Modal,
-  Platform,
-  Dimensions,
-  BackHandler,
-} from 'react-native';
+﻿import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, Image, StyleSheet, TouchableOpacity, ScrollView, Modal, Platform, Dimensions, BackHandler, StatusBar, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { DISEASE_INFO, getDiseaseInfo } from '../constants/diseaseInfo';
+import { useTheme } from '../context/ThemeContext';
+import NetInfo from '@react-native-community/netinfo';
+import Toast from 'react-native-toast-message';
+import { supabase } from '../utils/supabaseClient';
+import { savePendingScan, flushQueue, generateScanId } from '../utils/syncManager';
 
 const { width, height } = Dimensions.get('window');
-
-// RootCare Design System tokens
-const colors = {
-  surface: '#FFF8F6',
-  surfaceContainerLow: '#FFF1ED',
-  surfaceContainerHigh: '#FFE2DA',
-  onSurface: '#2C160E',
-  onSurfaceVariant: '#40493D',
-  primary: '#0D631B',
-  onPrimary: '#FFFFFF',
-  primaryContainer: '#2E7D32',
-  secondary: '#7A5649',
-  onSecondary: '#FFFFFF',
-  tertiary: '#774C00',
-  outline: '#707A6C',
-  outlineVariant: '#BFCABA',
-};
 
 const typography = {
   headlineSm: { fontFamily: 'Montserrat', fontSize: 20, fontWeight: '600', lineHeight: 28 },
@@ -44,175 +21,206 @@ const typography = {
 };
 
 const spacing = { xs: 4, sm: 12, md: 16, lg: 24, xl: 32, marginMobile: 20 };
-
 const rounded = { sm: 4, DEFAULT: 8, md: 12, lg: 16, xl: 24, full: 9999 };
-
 const HEADER_HEIGHT = 56;
-const MIN_TOUCH = 48;
 
-// Walk up the navigation tree until we find the nearest Tab Navigator.
-// ResultScreen lives inside ScannerStack (a Stack Navigator), which itself
-// lives inside MainTabs (the Tab Navigator) - so navigation.getParent()
-// alone only reaches the Stack, not the Tab bar. Setting tabBarStyle on the
-// Stack does nothing, which is why the CustomTabBar was staying visible
-// (and tappable) underneath the confirmation modal.
+const GREEN_HEALTHY = '#2E9E4F';
+const AMBER_DISEASE = '#F59E0B';
+
 const findTabNavigator = (navigation) => {
   let nav = navigation.getParent();
-  while (nav && nav.getState()?.type !== 'tab') {
-    nav = nav.getParent();
-  }
+  while (nav && nav.getState()?.type !== 'tab') nav = nav.getParent();
   return nav;
 };
 
 const ResultScreen = ({ route, navigation }) => {
-  const { imageUri, scanDate } = route.params || {};
-  const [isSaved, setIsSaved] = useState(false);
+  const { themeColors, isDarkMode } = useTheme();
+
+  const {
+    imageUri,
+    preparedImageUri,
+    scanDate,
+    diseaseKey,
+    diseaseLabel,
+    confidence,
+    readOnly = false,
+  } = route.params || {};
+
+  const [isSaved, setIsSaved] = useState(readOnly);
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedOffline, setSavedOffline] = useState(false);
+  const savingRef = useRef(false);
+  const scanIdRef = useRef(null);
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [savedModalVisible, setSavedModalVisible] = useState(false);
 
-  // Use refs to store pending action and to track mounted state
   const pendingActionRef = useRef(null);
   const isMountedRef = useRef(true);
   const isSavedRef = useRef(isSaved);
 
   useEffect(() => {
     isMountedRef.current = true;
-    return () => {
-      isMountedRef.current = false;
-    };
+    return () => { isMountedRef.current = false; };
   }, []);
 
-  useEffect(() => {
-    isSavedRef.current = isSaved;
-  }, [isSaved]);
+  useEffect(() => { isSavedRef.current = isSaved; }, [isSaved]);
 
-  // Hide tab bar for the entire time this screen is focused (not just while
-  // the modal is open) - now correctly targets the Tab Navigator instead of
-  // the intermediate Stack Navigator.
   useEffect(() => {
-    const tabNavigator = findTabNavigator(navigation);
-    if (tabNavigator) {
-      tabNavigator.setOptions({
-        tabBarStyle: { display: 'none' },
-      });
-    }
-    return () => {
-      const tn = findTabNavigator(navigation);
-      if (tn) {
-        tn.setOptions({
-          tabBarStyle: { display: 'flex' },
-        });
-      }
-    };
+    const unsubscribe = navigation.addListener('blur', () => {
+      setConfirmVisible(false);
+      setSavedModalVisible(false);
+      pendingActionRef.current = null;
+    });
+    return unsubscribe;
   }, [navigation]);
 
-  // Block Android back button when modal is visible
   useEffect(() => {
-    if (confirmVisible) {
-      const backHandler = BackHandler.addEventListener('hardwareBackPress', () => {
-        return true;
-      });
+    if (confirmVisible || savedModalVisible) {
+      const backHandler = BackHandler.addEventListener('hardwareBackPress', () => true);
       return () => backHandler.remove();
     }
-  }, [confirmVisible]);
+  }, [confirmVisible, savedModalVisible]);
 
-  const diseaseData = {
-    name: 'Cassava Mosaic Disease',
-    description: 'A viral disease that causes yellow mosaic patterns on leaves.',
-    treatment: 'Remove infected plants, use resistant varieties, control whitefly vectors.',
-    prevention: 'Plant certified disease-free cuttings, practice crop rotation.',
-  };
+  const diseaseData =
+    getDiseaseInfo(diseaseKey) ||
+    getDiseaseInfo(diseaseLabel) ||
+    getDiseaseInfo('HEALTHY') ||
+    DISEASE_INFO.cassava_mosaic;
+
+  const isHealthyResult =
+    diseaseData.name === 'Healthy Cassava' ||
+    diseaseKey === 'healthy' ||
+    diseaseKey === 'HEALTHY' ||
+    diseaseKey === 'Healthy' ||
+    diseaseLabel === 'Healthy';
 
   const scannedAt = scanDate ? new Date(scanDate) : new Date();
-  const formattedDate = scannedAt.toLocaleDateString(undefined, {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-  });
-  const formattedTime = scannedAt.toLocaleTimeString(undefined, {
-    hour: 'numeric',
-    minute: '2-digit',
-  });
+  const formattedDate = scannedAt.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+  const formattedTime = scannedAt.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 
-  const saveResult = () => {
+  const headerIcon = isHealthyResult ? 'checkmark-circle' : 'alert-circle';
+  const headerColor = isHealthyResult ? GREEN_HEALTHY : AMBER_DISEASE;
+
+  const hasDescription = !!diseaseData.description;
+  const hasTreatment = !!diseaseData.treatment;
+  const hasPrevention = !!diseaseData.prevention;
+  const hasSymptoms = !!diseaseData.symptoms;
+
+  const hasAnySection = isHealthyResult
+    ? (hasDescription || hasPrevention)
+    : (hasDescription || hasTreatment || hasPrevention || hasSymptoms);
+
+  const saveResult = async () => {
+    if (readOnly) return true;
+    if (savingRef.current || isSavedRef.current) return isSavedRef.current;
+    savingRef.current = true;
+
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setIsSaved(true);
-    setSavedModalVisible(true);
-  };
+    setIsSaving(true);
 
-  // Show modal function - uses refs to avoid state update during render
-  const showModal = (action) => {
-    if (isSavedRef.current) {
-      action();
-      return;
-    }
-    pendingActionRef.current = action;
-    // Use requestAnimationFrame to defer state update
-    requestAnimationFrame(() => {
-      if (isMountedRef.current) {
-        setConfirmVisible(true);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+
+      if (!session?.user?.id) {
+        setIsSaved(true);
+        return true;
       }
-    });
-  };
 
-  const navigateToHome = () => {
-    showModal(() => navigation.navigate('Home'));
-  };
+      const diseaseType = diseaseData.type || diseaseData.diseaseType || 'Unknown';
+      const diseaseAccuracy = typeof confidence === 'number'
+        ? confidence
+        : (confidence ? parseFloat(confidence) : null);
 
-  const navigateToScanAgain = () => {
-    showModal(() => navigation.goBack());
-  };
+      if (!scanIdRef.current) scanIdRef.current = generateScanId();
 
-  const handleBackPress = () => {
-    showModal(() => navigation.goBack());
-  };
-
-  // Handle back navigation
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('beforeRemove', (e) => {
-      if (isSavedRef.current) return;
-      e.preventDefault();
-      pendingActionRef.current = () => navigation.dispatch(e.data.action);
-      requestAnimationFrame(() => {
-        if (isMountedRef.current) {
-          setConfirmVisible(true);
+      const canonicalCode = (() => {
+        if (isHealthyResult) return 'healthy';
+        if (diseaseKey && DISEASE_INFO[diseaseKey]) return diseaseKey;
+        if (diseaseLabel) {
+          const hit = Object.entries(DISEASE_INFO).find(([, v]) => v.name === diseaseLabel);
+          if (hit) return hit[0];
         }
+        return null;
+      })();
+
+      await savePendingScan({
+        scanId: scanIdRef.current,
+        userId: session.user.id,
+        preparedImageUri,
+        cropType: diseaseData.crop || 'Cassava',
+        capturedAt: scannedAt.toISOString(),
+        diseaseCode: canonicalCode,
+        diseaseName: diseaseData.name,
+        diseaseType,
+        severity: diseaseData.severity || null,
+        accuracy: Number.isFinite(diseaseAccuracy) ? diseaseAccuracy : null,
+        description: diseaseData.description || null,
+        treatment: diseaseData.treatment || null,
+        prevention: diseaseData.prevention || null,
+        symptoms: diseaseData.symptoms || null,
       });
-    });
-    return unsubscribe;
-  }, [navigation]);
 
-  // Handle tab navigation - use requestAnimationFrame instead of setTimeout
-  useEffect(() => {
-    const tabNavigator = findTabNavigator(navigation);
-    if (!tabNavigator) return undefined;
+      let online = false;
+      try {
+        const net = await NetInfo.fetch();
+        online = !!net.isConnected && net.isInternetReachable !== false;
+      } catch (_) {}
 
-    const unsubscribe = tabNavigator.addListener('tabPress', (e) => {
-      if (isSavedRef.current) return;
-      e.preventDefault();
-      const targetRoute = tabNavigator
-        .getState()
-        .routes.find((r) => r.key === e.target);
-      pendingActionRef.current = () => {
-        if (targetRoute) tabNavigator.navigate(targetRoute.name);
-      };
-      requestAnimationFrame(() => {
-        if (isMountedRef.current) {
-          setConfirmVisible(true);
-        }
+      if (isMountedRef.current) {
+        setIsSaved(true);
+        setSavedOffline(!online);
+      }
+      Toast.show({
+        type: 'success',
+        text1: 'Saved',
+        text2: online ? 'Scan saved.' : "Saved. Will upload when you're online",
+        visibilityTime: 2500,
       });
-    });
-    return unsubscribe;
-  }, [navigation]);
 
-  const handleSaveAndContinue = () => {
-    saveResult();
+      if (online) {
+        flushQueue().catch((e) => console.warn('Queue flush failed:', e?.message));
+      }
+      return true;
+    } catch (err) {
+      console.warn('Save error:', err);
+      Alert.alert('Save failed', err?.message || 'Unknown error');
+      return false;
+    } finally {
+      savingRef.current = false;
+      if (isMountedRef.current) setIsSaving(false);
+    }
+  };
+
+  const goHome = () => {
+    const tabNav = findTabNavigator(navigation);
+    if (tabNav) tabNav.reset({ index: 0, routes: [{ name: 'Home' }] });
+    else navigation.navigate('Home');
+  };
+
+  const goToScanner = () => {
+    const tabNav = findTabNavigator(navigation);
+    if (tabNav) tabNav.reset({ index: 0, routes: [{ name: 'Scanner' }] });
+    else navigation.navigate('Scanner');
+  };
+
+  const showModal = (action) => {
+    if (readOnly || isSavedRef.current) { action(); return; }
+    pendingActionRef.current = action;
+    setConfirmVisible(true);
+  };
+
+  const handleBackPress = () => showModal(goHome);
+  const navigateToHome = () => showModal(goHome);
+  const navigateToScanAgain = () => showModal(goToScanner);
+
+  const handleSaveAndContinue = async () => {
+    const ok = await saveResult();
+    if (!ok) return;
     setConfirmVisible(false);
     const action = pendingActionRef.current;
     pendingActionRef.current = null;
-    if (action) {
-      action();
-    }
+    setSavedModalVisible(true);
+    setTimeout(() => { if (action) action(); }, 1000);
   };
 
   const handleDiscard = () => {
@@ -220,203 +228,185 @@ const ResultScreen = ({ route, navigation }) => {
     setConfirmVisible(false);
     const action = pendingActionRef.current;
     pendingActionRef.current = null;
-    if (action) {
-      action();
-    }
+    if (action) action();
   };
 
-  const handleCancel = () => {
-    setConfirmVisible(false);
-    pendingActionRef.current = null;
-  };
+  const handleCancel = () => { setConfirmVisible(false); pendingActionRef.current = null; };
 
   return (
-    <SafeAreaView style={styles.container} edges={['top']}>
-      {/* ===== REDESIGNED HEADER ===== */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={handleBackPress}
-          activeOpacity={0.7}
-        >
-          <Ionicons name="chevron-back" size={28} color={colors.onSurface} />
+    <SafeAreaView style={[styles.container, { backgroundColor: themeColors.background }]} edges={['top']}>
+      <StatusBar barStyle={isDarkMode ? 'light-content' : 'dark-content'} />
+      <View style={[styles.header, { backgroundColor: themeColors.background, borderBottomColor: themeColors.border }]}>
+        <TouchableOpacity style={styles.backButton} onPress={handleBackPress} activeOpacity={0.7}>
+          <Ionicons name="chevron-back" size={28} color={themeColors.text} />
         </TouchableOpacity>
-        <Text style={[styles.headerText, { color: colors.onSurface }]}>
-          Analysis Results
+        <Text style={[styles.headerText, { color: themeColors.text }]}>
+          {readOnly ? 'Scan Detail' : 'Analysis Results'}
         </Text>
         <TouchableOpacity style={styles.headerAction} activeOpacity={0.7}>
-          <Ionicons name="share-outline" size={24} color={colors.onSurface} />
+          <Ionicons name="share-outline" size={24} color={themeColors.text} />
         </TouchableOpacity>
       </View>
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        showsVerticalScrollIndicator={false}
-      >
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {imageUri && (
-          <View style={styles.imageContainer}>
+          <View style={[styles.imageContainer, { backgroundColor: themeColors.surface, borderColor: themeColors.border }]}>
             <Image source={{ uri: imageUri }} style={styles.image} />
           </View>
         )}
 
-        <View style={styles.resultCard}>
+        <View style={[styles.resultCard, { backgroundColor: themeColors.card }]}>
           <View style={styles.diseaseHeader}>
-            <Ionicons name="alert-circle" size={28} color={colors.tertiary} />
-            <Text style={styles.diseaseName}>{diseaseData.name}</Text>
+            <Ionicons name={headerIcon} size={26} color={headerColor} />
+            <Text style={[styles.diseaseName, { color: themeColors.text }]}>{diseaseData.name}</Text>
           </View>
-
           <View style={styles.scanDateRow}>
-            <Ionicons name="calendar-outline" size={14} color={colors.onSurfaceVariant} />
-            <Text style={styles.scanDateText}>
+            <Ionicons name="calendar-outline" size={14} color={themeColors.textSecondary} />
+            <Text style={[styles.scanDateText, { color: themeColors.textSecondary }]}>
               Scanned {formattedDate} · {formattedTime}
             </Text>
           </View>
 
-          <View style={styles.divider} />
+          {hasAnySection && (
+            <View style={[styles.divider, { backgroundColor: themeColors.border }]} />
+          )}
 
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Ionicons name="document-text-outline" size={20} color={colors.secondary} />
-              <Text style={styles.sectionTitle}>Description</Text>
+          {hasDescription && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name="document-text-outline" size={18} color={themeColors.secondary} />
+                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Description</Text>
+              </View>
+              <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>
+                {diseaseData.description}
+              </Text>
             </View>
-            <Text style={styles.sectionText}>{diseaseData.description}</Text>
-          </View>
+          )}
 
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Ionicons name="medkit-outline" size={20} color={colors.secondary} />
-              <Text style={styles.sectionTitle}>Treatment</Text>
+          {!isHealthyResult && hasTreatment && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name="medkit-outline" size={18} color={themeColors.secondary} />
+                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Treatment</Text>
+              </View>
+              <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>
+                {diseaseData.treatment}
+              </Text>
             </View>
-            <Text style={styles.sectionText}>{diseaseData.treatment}</Text>
-          </View>
+          )}
 
-          <View style={styles.section}>
-            <View style={styles.sectionHeader}>
-              <Ionicons name="shield-checkmark-outline" size={20} color={colors.secondary} />
-              <Text style={styles.sectionTitle}>Prevention</Text>
+          {hasPrevention && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name={isHealthyResult ? 'bulb-outline' : 'shield-checkmark-outline'} size={18} color={themeColors.secondary} />
+                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>
+                  {isHealthyResult ? 'Care Tips' : 'Prevention'}
+                </Text>
+              </View>
+              <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>
+                {diseaseData.prevention}
+              </Text>
             </View>
-            <Text style={styles.sectionText}>{diseaseData.prevention}</Text>
-          </View>
+          )}
+
+          {!isHealthyResult && hasSymptoms && (
+            <View style={styles.section}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name="eye-outline" size={18} color={themeColors.secondary} />
+                <Text style={[styles.sectionTitle, { color: themeColors.text }]}>Symptoms</Text>
+              </View>
+              <Text style={[styles.sectionText, { color: themeColors.textSecondary }]}>
+                {diseaseData.symptoms}
+              </Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.buttonContainer}>
-          <TouchableOpacity
-            style={[styles.button, styles.saveButton, isSaved && styles.savedButton]}
-            onPress={saveResult}
-            activeOpacity={0.85}
-            disabled={isSaved}
-          >
-            <Ionicons 
-              name={isSaved ? "bookmark" : "bookmark-outline"} 
-              size={18} 
-              color={colors.onPrimary} 
-            />
-            <Text style={styles.buttonText}>{isSaved ? 'Saved' : 'Save'}</Text>
-          </TouchableOpacity>
+          {!readOnly && (
+            <TouchableOpacity
+              style={[styles.button, { backgroundColor: themeColors.primary }, (isSaved || isSaving) && { opacity: 0.6 }]}
+              onPress={saveResult}
+              activeOpacity={0.85}
+              disabled={isSaved || isSaving}
+            >
+              {isSaving ? (
+                <Text style={[styles.buttonText, { color: themeColors['on-primary'] }]}>Saving…</Text>
+              ) : (
+                <>
+                  <Ionicons name={isSaved ? 'bookmark' : 'bookmark-outline'} size={18} color={themeColors['on-primary']} />
+                  <Text style={[styles.buttonText, { color: themeColors['on-primary'] }]}>
+                    {isSaved ? 'Saved' : 'Save'}
+                  </Text>
+                </>
+              )}
+            </TouchableOpacity>
+          )}
 
           <TouchableOpacity
-            style={[styles.button, styles.scanButton]}
+            style={[styles.button, { backgroundColor: themeColors.secondary }]}
             onPress={navigateToScanAgain}
             activeOpacity={0.85}
           >
-            <Ionicons name="scan-outline" size={18} color={colors.onSecondary} />
-            <Text style={styles.buttonText}>Scan Again</Text>
+            <Ionicons name="scan-outline" size={18} color="#FFFFFF" />
+            <Text style={[styles.buttonText, { color: '#FFFFFF' }]}>Scan Again</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.button, styles.homeButton]}
+            style={[styles.button, { backgroundColor: themeColors.surface, borderWidth: 1, borderColor: themeColors.border }]}
             onPress={navigateToHome}
             activeOpacity={0.85}
           >
-            <Ionicons name="home-outline" size={18} color={colors.onSurface} />
-            <Text style={[styles.buttonText, styles.homeButtonText]}>Home</Text>
+            <Ionicons name="home-outline" size={18} color={themeColors.text} />
+            <Text style={[styles.buttonText, { color: themeColors.text }]}>Home</Text>
           </TouchableOpacity>
         </View>
       </ScrollView>
 
-      {/* Modal that blocks ALL navigation */}
-      <Modal
-        visible={confirmVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={handleCancel}
-        statusBarTranslucent={true}
-      >
+      <Modal visible={confirmVisible} transparent animationType="fade" onRequestClose={handleCancel} statusBarTranslucent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <TouchableOpacity 
-              style={styles.modalCloseButton} 
-              onPress={handleCancel}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="close" size={24} color={colors.onSurface} />
+          <View style={[styles.modalCard, { backgroundColor: themeColors.card }]}>
+            <TouchableOpacity style={[styles.modalCloseButton, { backgroundColor: themeColors.surface }]} onPress={handleCancel} activeOpacity={0.7}>
+              <Ionicons name="close" size={24} color={themeColors.text} />
             </TouchableOpacity>
-
-            <ScrollView 
-              showsVerticalScrollIndicator={false}
-              contentContainerStyle={styles.modalScrollContent}
-            >
-              <Text style={styles.modalTitle}>Save this result?</Text>
-              <Text style={styles.modalBody}>
+            <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.modalScrollContent}>
+              <Text style={[styles.modalTitle, { color: themeColors.text }]}>Save this result?</Text>
+              <Text style={[styles.modalBody, { color: themeColors.textSecondary }]}>
                 You haven't saved this analysis yet. Save it to your history before you go, or discard it.
               </Text>
-
               <TouchableOpacity
-                style={[styles.button, styles.modalSaveButton]}
+                style={[styles.button, { backgroundColor: themeColors.primary, marginBottom: spacing.xs, paddingVertical: spacing.sm, width: '100%', minHeight: 44 }]}
                 onPress={handleSaveAndContinue}
                 activeOpacity={0.85}
               >
-                <Ionicons name="bookmark-outline" size={18} color={colors.onPrimary} />
-                <Text style={styles.buttonText}>Save & Continue</Text>
+                <Ionicons name="bookmark-outline" size={18} color={themeColors['on-primary']} />
+                <Text style={[styles.buttonText, { color: themeColors['on-primary'] }]}>Save & Continue</Text>
               </TouchableOpacity>
-
               <TouchableOpacity
-                style={[styles.button, styles.modalDiscardButton]}
+                style={[styles.button, { backgroundColor: 'transparent', borderWidth: 1, borderColor: themeColors.border, marginBottom: spacing.xs, paddingVertical: spacing.sm, width: '100%', minHeight: 44 }]}
                 onPress={handleDiscard}
                 activeOpacity={0.85}
               >
-                <Text style={[styles.buttonText, styles.modalDiscardText]}>Discard</Text>
+                <Text style={[styles.buttonText, { color: themeColors.textSecondary }]}>Discard</Text>
               </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.modalCancelButton}
-                onPress={handleCancel}
-                activeOpacity={0.7}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
+              <TouchableOpacity style={styles.modalCancelButton} onPress={handleCancel} activeOpacity={0.7}>
+                <Text style={[styles.modalCancelText, { color: themeColors.textSecondary }]}>Cancel</Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
         </View>
       </Modal>
 
-      {/* Custom "Saved" confirmation modal - replaces the native Alert.alert
-          so it can actually be styled with the app's colors/typography. */}
-      <Modal
-        visible={savedModalVisible}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setSavedModalVisible(false)}
-        statusBarTranslucent={true}
-      >
+      <Modal visible={savedModalVisible} transparent animationType="fade" onRequestClose={() => {}} statusBarTranslucent>
         <View style={styles.modalOverlay}>
-          <View style={styles.savedModalCard}>
-            <View style={styles.savedIconCircle}>
-              <Ionicons name="checkmark" size={32} color={colors.onPrimary} />
+          <View style={[styles.savedModalCard, { backgroundColor: themeColors.card }]}>
+            <View style={[styles.savedIconCircle, { backgroundColor: themeColors.primary }]}>
+              <Ionicons name="checkmark" size={32} color={themeColors['on-primary']} />
             </View>
-
-            <Text style={styles.savedModalTitle}>Saved!</Text>
-            <Text style={styles.savedModalBody}>
-              Scan result has been saved to history.
+            <Text style={[styles.savedModalTitle, { color: themeColors.text }]}>Saved!</Text>
+            <Text style={[styles.savedModalBody, { color: themeColors.textSecondary }]}>
+              {savedOffline ? "Saved. Will upload when you're online." : 'Scan result has been saved to history.'}
             </Text>
-
-            <TouchableOpacity
-              style={styles.savedModalButton}
-              onPress={() => setSavedModalVisible(false)}
-              activeOpacity={0.85}
-            >
-              <Text style={styles.buttonText}>OK</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -425,292 +415,39 @@ const ResultScreen = ({ route, navigation }) => {
 };
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.surface,
-    ...(Platform.OS === 'web' ? { height: '100vh', overflow: 'hidden' } : {}),
-  },
-  // ===== REDESIGNED HEADER STYLES =====
-  header: {
-    width: '100%',
-    minHeight: HEADER_HEIGHT,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.05)',
-    backgroundColor: colors.surface,
-  },
-  backButton: {
-    padding: 4,
-    minWidth: 40,
-  },
-  headerText: {
-    fontSize: 18,
-    fontWeight: '600',
-    flex: 1,
-    textAlign: 'center',
-    letterSpacing: 0.3,
-  },
-  headerAction: {
-    padding: 4,
-    minWidth: 40,
-    alignItems: 'flex-end',
-  },
-  scrollContent: {
-    flexGrow: 1,
-    padding: spacing.marginMobile,
-    paddingBottom: 100, // Added padding for tab bar
-  },
-  imageContainer: {
-    width: '100%',
-    height: 250,
-    backgroundColor: colors.surfaceContainerLow,
-    borderRadius: rounded.DEFAULT,
-    borderWidth: 2,
-    borderColor: colors.outlineVariant,
-    overflow: 'hidden',
-    marginBottom: spacing.md,
-  },
-  image: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  resultCard: {
-    backgroundColor: colors.surfaceContainerLow,
-    borderRadius: rounded.DEFAULT,
-    padding: spacing.marginMobile,
-    marginBottom: spacing.md,
-    shadowColor: 'rgba(93, 64, 55, 0.08)',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 1,
-    shadowRadius: 4,
-    elevation: 2,
-  },
-  diseaseHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.sm - 2,
-    marginBottom: spacing.xs,
-  },
-  diseaseName: {
-    ...typography.headlineSm,
-    color: colors.onSurface,
-    textAlign: 'center',
-  },
-  scanDateRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs,
-    marginBottom: spacing.md,
-  },
-  scanDateText: {
-    ...typography.labelSm,
-    color: colors.onSurfaceVariant,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: colors.outlineVariant,
-    marginBottom: spacing.md,
-  },
-  section: {
-    marginBottom: spacing.md,
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs + 2,
-    marginBottom: spacing.xs + 2,
-  },
-  sectionTitle: {
-    ...typography.labelLg,
-    fontSize: 16,
-    color: colors.onSurface,
-  },
-  sectionText: {
-    ...typography.bodyMd,
-    fontSize: 14,
-    color: colors.onSurfaceVariant,
-    paddingLeft: 28,
-  },
-  buttonContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: spacing.xs + 4,
-  },
-  button: {
-    flexDirection: 'row',
-    minHeight: MIN_TOUCH,
-    paddingHorizontal: spacing.sm,
-    borderRadius: rounded.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs + 2,
-    flex: 1,
-  },
-  saveButton: {
-    backgroundColor: colors.primaryContainer,
-  },
-  savedButton: {
-    opacity: 0.6,
-  },
-  scanButton: {
-    backgroundColor: colors.secondary,
-  },
-  homeButton: {
-    backgroundColor: colors.surfaceContainerHigh,
-    borderWidth: 1,
-    borderColor: colors.outlineVariant,
-  },
-  buttonText: {
-    ...typography.labelSm,
-    fontSize: 12,
-    color: colors.onPrimary,
-  },
-  homeButtonText: {
-    color: colors.onSurface,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(44, 22, 14, 0.6)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: spacing.md,
-  },
-  modalCard: {
-    width: '100%',
-    maxWidth: 380,
-    maxHeight: height * 0.75,
-    backgroundColor: colors.surface,
-    borderRadius: rounded.xl,
-    padding: spacing.md,
-    paddingTop: spacing.xl,
-    paddingBottom: spacing.sm,
-    shadowColor: 'rgba(93, 64, 55, 0.15)',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 1,
-    shadowRadius: 16,
-    elevation: 12,
-    position: 'relative',
-  },
-  modalScrollContent: {
-    flexGrow: 1,
-    paddingBottom: spacing.xs,
-  },
-  modalCloseButton: {
-    position: 'absolute',
-    top: spacing.sm,
-    right: spacing.sm,
-    width: 36,
-    height: 36,
-    borderRadius: rounded.full,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surfaceContainerLow,
-    zIndex: 10,
-  },
-  modalTitle: {
-    ...typography.headlineSm,
-    fontSize: 18,
-    color: colors.onSurface,
-    marginBottom: spacing.xs,
-    textAlign: 'center',
-    paddingRight: 24,
-  },
-  modalBody: {
-    ...typography.bodyMd,
-    fontSize: 14,
-    color: colors.onSurfaceVariant,
-    textAlign: 'center',
-    marginBottom: spacing.md,
-    lineHeight: 20,
-  },
-  modalSaveButton: {
-    backgroundColor: colors.primaryContainer,
-    marginBottom: spacing.xs,
-    paddingVertical: spacing.sm,
-    width: '100%',
-    minHeight: 44,
-  },
-  modalDiscardButton: {
-    backgroundColor: 'transparent',
-    borderWidth: 1,
-    borderColor: colors.outlineVariant,
-    marginBottom: spacing.xs,
-    paddingVertical: spacing.sm,
-    width: '100%',
-    minHeight: 44,
-  },
-  modalDiscardText: {
-    color: colors.onSurfaceVariant,
-  },
-  modalCancelButton: {
-    minHeight: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: spacing.xs,
-    width: '100%',
-  },
-  modalCancelText: {
-    ...typography.labelLg,
-    fontSize: 14,
-    color: colors.outline,
-    fontWeight: '500',
-  },
-  // ===== CUSTOM "SAVED" MODAL =====
-  savedModalCard: {
-    width: '100%',
-    maxWidth: 340,
-    backgroundColor: colors.surface,
-    borderRadius: rounded.xl,
-    padding: spacing.xl,
-    alignItems: 'center',
-    shadowColor: 'rgba(93, 64, 55, 0.15)',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 1,
-    shadowRadius: 16,
-    elevation: 12,
-  },
-  savedIconCircle: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: colors.primaryContainer,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.md,
-  },
-  savedModalTitle: {
-    ...typography.headlineSm,
-    fontSize: 20,
-    color: colors.onSurface,
-    marginBottom: spacing.xs,
-    textAlign: 'center',
-  },
-  savedModalBody: {
-    ...typography.bodyMd,
-    fontSize: 14,
-    color: colors.onSurfaceVariant,
-    textAlign: 'center',
-    marginBottom: spacing.lg,
-    lineHeight: 20,
-  },
-  savedModalButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.primaryContainer,
-    borderRadius: rounded.full,
-    width: '100%',
-    minHeight: 48,
-    paddingHorizontal: spacing.sm,
-    gap: spacing.xs + 2,
-  },
+  container: { flex: 1, ...(Platform.OS === 'web' ? { height: '100vh', overflow: 'hidden' } : {}) },
+  header: { width: '100%', minHeight: HEADER_HEIGHT, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 10, paddingHorizontal: 14, borderBottomWidth: 1 },
+  backButton: { padding: 4, minWidth: 40 },
+  headerText: { fontSize: 18, fontWeight: '600', flex: 1, textAlign: 'center', letterSpacing: 0.3 },
+  headerAction: { padding: 4, minWidth: 40, alignItems: 'flex-end' },
+  scrollContent: { flexGrow: 1, padding: spacing.md, paddingBottom: 80 },
+  imageContainer: { width: '100%', height: 200, borderRadius: rounded.DEFAULT, borderWidth: 2, overflow: 'hidden', marginBottom: spacing.sm },
+  image: { width: '100%', height: '100%', resizeMode: 'cover' },
+  resultCard: { borderRadius: rounded.DEFAULT, padding: spacing.md, marginBottom: spacing.sm },
+  diseaseHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs + 4, marginBottom: spacing.xs },
+  diseaseName: { ...typography.headlineSm, fontSize: 19, textAlign: 'center' },
+  scanDateRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.xs, marginBottom: spacing.sm },
+  scanDateText: { ...typography.labelSm },
+  divider: { height: 1, marginBottom: spacing.sm },
+  section: { marginBottom: spacing.sm + 2 },
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs + 2, marginBottom: spacing.xs },
+  sectionTitle: { ...typography.labelLg, fontSize: 15 },
+  sectionText: { ...typography.bodyMd, fontSize: 13.5, lineHeight: 21, paddingLeft: 26 },
+  buttonContainer: { flexDirection: 'row', justifyContent: 'space-between', gap: 6 },
+  button: { flexDirection: 'row', minHeight: 46, paddingHorizontal: 10, borderRadius: rounded.full, alignItems: 'center', justifyContent: 'center', gap: spacing.xs + 2, flex: 1 },
+  buttonText: { ...typography.labelSm, fontSize: 12 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(44, 22, 14, 0.6)', justifyContent: 'center', alignItems: 'center', padding: spacing.md },
+  modalCard: { width: '100%', maxWidth: 380, maxHeight: height * 0.75, borderRadius: rounded.xl, padding: spacing.md, paddingTop: spacing.lg, paddingBottom: spacing.sm, position: 'relative' },
+  modalScrollContent: { flexGrow: 1, paddingBottom: spacing.xs },
+  modalCloseButton: { position: 'absolute', top: spacing.sm, right: spacing.sm, width: 36, height: 36, borderRadius: rounded.full, alignItems: 'center', justifyContent: 'center', zIndex: 10 },
+  modalTitle: { ...typography.headlineSm, fontSize: 18, marginBottom: spacing.xs, textAlign: 'center', paddingRight: 24 },
+  modalBody: { ...typography.bodyMd, fontSize: 14, textAlign: 'center', marginBottom: spacing.md, lineHeight: 20 },
+  modalCancelButton: { minHeight: 40, alignItems: 'center', justifyContent: 'center', paddingVertical: spacing.xs, width: '100%' },
+  modalCancelText: { ...typography.labelLg, fontSize: 14, fontWeight: '500' },
+  savedModalCard: { width: '100%', maxWidth: 340, borderRadius: rounded.xl, padding: spacing.lg, alignItems: 'center' },
+  savedIconCircle: { width: 60, height: 60, borderRadius: 30, alignItems: 'center', justifyContent: 'center', marginBottom: spacing.sm },
+  savedModalTitle: { ...typography.headlineSm, fontSize: 19, marginBottom: spacing.xs, textAlign: 'center' },
+  savedModalBody: { ...typography.bodyMd, fontSize: 14, textAlign: 'center', marginBottom: spacing.md, lineHeight: 20 },
 });
 
 export default ResultScreen;

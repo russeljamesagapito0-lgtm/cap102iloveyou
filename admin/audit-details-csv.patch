@@ -1,0 +1,90 @@
+--- a/src/pages/Audit.js	2026-10-13 23:54:06.853476832 +0000
++++ b/src/pages/Audit.js	2026-10-13 23:54:06.854984976 +0000
+@@ -2,6 +2,7 @@
+ import Badge from '../components/Badge';
+ import Pager from '../components/Pager';
+ import usePagination from '../lib/usePagination';
++import { downloadCsv } from '../lib/csv';
+ import { supabase, fmtDate } from '../lib/supabase';
+ 
+ const ACTION_COLORS = {
+@@ -17,6 +18,8 @@
+   'maintenance.update': 'blue',
+   'model.switch': 'yellow',
+   'report.export': 'blue',
++  'export.users': 'blue',
++  'backup.download': 'blue',
+   login: 'green',
+   logout: 'yellow',
+ };
+@@ -53,8 +56,11 @@
+     case 'maintenance.update':
+       return details.message ? `Message: ${details.message}` : '-';
+ 
+-    case 'report.export':
+-      return `${details.report || 'report'} · ${details.rows ?? 0} rows`;
++    case 'report.export': {
++      const size = details.rows != null ? `${details.rows} rows` : `${details.scans ?? 0} scans`;
++      const range = details.from || details.to ? ` · ${details.from || 'start'} to ${details.to || 'today'}` : '';
++      return `${details.report || 'report'} · ${size}${range}`;
++    }
+ 
+     case 'model.switch':
+       return `${details.from || '?'} → ${details.to || '?'}`;
+@@ -65,9 +71,25 @@
+     case 'backup.all':
+       return `${details.profiles ?? 0} users · ${details.scans ?? 0} scans`;
+ 
++    case 'export.users':
++      return `Exported ${details.count ?? 0} users (${details.view || 'all'} view)`;
++
++    case 'backup.download': {
++      const counts = details.counts || {};
++      const tables = Object.keys(counts).length;
++      const rows = Object.values(counts).reduce((a, n) => a + (Number(n) || 0), 0);
++      return `Full system backup · ${rows} rows from ${tables} tables`;
++    }
++
+     default: {
+-      const text = JSON.stringify(details);
+-      return text.length > 140 ? text.slice(0, 140) + '…' : text;
++      const parts = Object.entries(details)
++        .filter(([k, v]) => v !== null && v !== undefined && v !== '' && k !== 'at')
++        .map(([k, v]) => {
++          const label = k.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
++          const value = typeof v === 'object' ? `${Object.keys(v).length} items` : String(v);
++          return `${label}: ${value}`;
++        });
++      return parts.length ? parts.join(' · ') : '-';
+     }
+   }
+ };
+@@ -103,6 +125,18 @@
+ 
+   const pager = usePagination(filtered, 15, tab);
+ 
++  const exportCsv = () => {
++    downloadCsv(
++      `rootcare-audit-${tab}_${new Date().toISOString().slice(0, 10)}.csv`,
++      filtered.map((r) => ({
++        when: r.created_at,
++        admin: adminName(r.profiles),
++        action: r.action,
++        details: formatDetails(r.action, r.details),
++      }))
++    );
++  };
++
+   return (
+     <div className="stack-lg">
+       <div className="flex-between">
+@@ -120,6 +154,9 @@
+               {t.label}
+             </button>
+           ))}
++          <button className="btn btn-outline btn-sm" onClick={exportCsv}>
++            Export CSV
++          </button>
+         </div>
+       </div>
+ 

@@ -1,122 +1,396 @@
-﻿// screens/ScannerScreen.js
-import React, { useState, useRef, useEffect } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  Image,
-  ImageBackground,
-  StyleSheet,
-  Platform,
-  Alert,
-  Dimensions,
-  Animated,
-} from 'react-native';
+﻿import React, { useState, useRef, useEffect, useCallback } from 'react';
+import {View,Text,TouchableOpacity,Image,StyleSheet,Platform,Animated,Alert,ActivityIndicator,Dimensions,Pressable,}from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
+import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import * as Haptics from 'expo-haptics';
+import Toast from 'react-native-toast-message';
+import { useFocusEffect } from '@react-navigation/native';
+import NetInfo from '@react-native-community/netinfo';
+import { runOfflineInference, loadOfflineModel } from '../utils/offlineInference';
+import { prepareScanImage } from '../utils/scanImage';
+import { DISEASE_INFO } from '../constants/diseaseInfo';
+import { analyzeCropImage } from '../utils/aiClient';
 
 const { width, height } = Dimensions.get('window');
+const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://172.167.134.221:5000';
+const API_URL = `${API_BASE_URL}/predict`;
+const HEALTH_URL = `${API_BASE_URL}/health`;
+const TIMEOUT = parseInt(process.env.EXPO_PUBLIC_API_TIMEOUT || '30000');
+const MAX_RETRIES = parseInt(process.env.EXPO_PUBLIC_MAX_RETRIES || '3');
+const DEBUG = process.env.EXPO_PUBLIC_DEBUG === 'true';
 
-// RootCare Design System tokens
-const colors = {
-  surface: '#FFF8F6',
-  surfaceContainer: '#FFE9E3',
-  surfaceContainerLow: '#FFF1ED',
-  onSurface: '#2C160E',
-  onSurfaceVariant: '#40493D',
-  primary: '#0D631B',
-  onPrimary: '#FFFFFF',
-  primaryContainer: '#2E7D32',
-  onPrimaryContainer: '#CBFFC2',
-  primaryFixedDim: '#88D982',
-  secondary: '#7A5649',
-  onSecondary: '#FFFFFF',
-  outlineVariant: '#BFCABA',
-  error: '#BA1A1A',
+const GEMINI_FALLBACK_THRESHOLD = 70;
+const CROP_FRACTION = 0.80;
+
+if (DEBUG) {
+  console.log(' API Base URL:', API_BASE_URL);
+}
+
+const fetchWithTimeout = (url, options = {}, timeout = TIMEOUT) => {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Request timed out')), timeout);
+    fetch(url, options)
+      .then((response) => {
+        clearTimeout(timer);
+        resolve(response);
+      })
+      .catch((error) => {
+        clearTimeout(timer);
+        reject(error);
+      });
+  });
 };
 
-const typography = {
-  headlineSm: { fontFamily: 'Montserrat', fontSize: 20, fontWeight: '600', lineHeight: 28 },
-  headlineMd: { fontFamily: 'Montserrat', fontSize: 24, fontWeight: '600', lineHeight: 32 },
-  bodyMd: { fontFamily: 'Open Sans', fontSize: 16, fontWeight: '400', lineHeight: 24 },
-  bodyLg: { fontFamily: 'Open Sans', fontSize: 18, fontWeight: '400', lineHeight: 28 },
-  labelLg: { fontFamily: 'Open Sans', fontSize: 14, fontWeight: '600', lineHeight: 20, letterSpacing: 0.1 },
-};
-
-const spacing = { xs: 4, sm: 12, md: 16, lg: 24, xl: 32, marginMobile: 20 };
-
-const rounded = { sm: 4, DEFAULT: 8, md: 12, lg: 16, xl: 24, full: 9999 };
-
-const HEADER_HEIGHT = 56;
-const MIN_TOUCH = 48;
-const SCANNER_SIZE = width * 0.75;
-
-// ===== IMPORT YOUR BACKGROUND IMAGE =====
-import backgroundImage from '../assets/screen.png';
-// Option 2: Remote URL
-// const backgroundImage = { uri: 'https://your-image-url.com/screen.png' };
-
-const ScannerScreen = ({ navigation }) => {
+const ScannerScreen = ({ navigation, route }) => {
   const [image, setImage] = useState(null);
   const [loading, setLoading] = useState(false);
-  
-  // Animation for scan line
-  const scanAnim = useRef(new Animated.Value(0)).current;
+  const [isApiReady, setIsApiReady] = useState(false);
+  const [apiCheckDone, setApiCheckDone] = useState(false);
+  const [flashEnabled, setFlashEnabled] = useState(false);
+  const [retryCount, setRetryCount] = useState(0);
+
+  const [offlineReady, setOfflineReady] = useState(false);
+  const [isOnline, setIsOnline] = useState(true);
+
+  const [permission, requestPermission] = useCameraPermissions();
+  const cameraRef = useRef(null);
+
+  // Corner focus animation: 1 = resting size, 0.9 = contracted
+  const cornerFocusAnim = useRef(new Animated.Value(1)).current;
+
+  const triggerFocusAnimation = () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Animated.sequence([
+      Animated.timing(cornerFocusAnim, {
+        toValue: 0.88,
+        duration: 180,
+        useNativeDriver: true,
+      }),
+      Animated.delay(140),
+      Animated.spring(cornerFocusAnim, {
+        toValue: 1,
+        friction: 5,
+        tension: 90,
+        useNativeDriver: true,
+      }),
+    ]).start();
+  };
 
   useEffect(() => {
-    startScanAnimation();
+    checkApiHealth();
+
+    loadOfflineModel()
+      .then(() => setOfflineReady(true))
+      .catch((err) => console.warn('Offline model unavailable:', err?.message));
+
+    const unsub = NetInfo.addEventListener((state) => {
+      setIsOnline(!!state.isConnected && state.isInternetReachable !== false);
+    });
+
+    return () => unsub();
   }, []);
 
-  const startScanAnimation = () => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(scanAnim, {
-          toValue: 1,
-          duration: 3000,
-          useNativeDriver: true,
-        }),
-        Animated.timing(scanAnim, {
-          toValue: 0,
-          duration: 3000,
-          useNativeDriver: true,
-        }),
-      ])
-    ).start();
+  useFocusEffect(
+    useCallback(() => {
+      setImage(null);
+      setLoading(false);
+      setFlashEnabled(false);
+
+      if (route.params?.clearImage) {
+        navigation.setParams({ clearImage: undefined });
+      }
+
+      const unsubscribe = navigation.addListener('blur', () => {
+        setImage(null);
+        setLoading(false);
+        setFlashEnabled(false);
+      });
+
+      return unsubscribe;
+    }, [navigation, route.params?.clearImage])
+  );
+
+  const checkApiHealth = async (attempt = 0) => {
+    if (DEBUG) console.log(' Checking API health (attempt ' + (attempt + 1) + ')');
+    try {
+      const response = await fetchWithTimeout(HEALTH_URL, { method: 'GET' }, 5000);
+      if (response.ok) {
+        setIsApiReady(true);
+        setApiCheckDone(true);
+        setRetryCount(0);
+        return true;
+      }
+      throw new Error('Server error');
+    } catch (error) {
+      if (attempt < MAX_RETRIES) {
+        setRetryCount(attempt + 1);
+        setTimeout(() => checkApiHealth(attempt + 1), 2000);
+        return false;
+      }
+
+      setIsApiReady(false);
+      setApiCheckDone(true);
+
+      Toast.show({
+        type: 'info',
+        text1: 'Offline Mode Active',
+        text2: 'Server unreachable. Offline scanning is ready.',
+        visibilityTime: 3000,
+      });
+
+      return false;
+    }
+  };
+  const preprocessImage = async (imageUri) => {
+    const prepared = await prepareScanImage(imageUri, {
+      centerCrop: true,
+      cropFraction: CROP_FRACTION,
+    });
+
+    const response = await fetch(prepared.uri);
+    const blob = await response.blob();
+    const base64 = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result.split(',')[1]);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    return { base64, preparedUri: prepared.uri };
+  };
+
+  const navigateToResult = (result, imageUri, preparedImageUri) => {
+    navigation.navigate('Result', {
+      imageUri,
+      preparedImageUri: preparedImageUri || null,
+      diseaseKey: result.diseaseKey || 'UNKNOWN',
+      diseaseLabel: result.diseaseName || 'Unknown Disease',
+      confidence: result.confidence || 0,
+      scanDate: new Date().toISOString(),
+      description: result.description || 'No description available.',
+      treatment: result.treatment || 'No treatment information available.',
+      prevention: result.prevention || 'No prevention information available.',
+      severity: result.severity || 'Unknown',
+      symptoms: result.symptoms || 'No symptoms listed.',
+      allProbabilities: result.allProbabilities || {},
+      detectionMetrics: result.detection_metrics || {},
+      offline: !!result._offline,
+      enhancedByAI: !!result._enhancedByAI,
+    });
+  };
+
+  const normalizeGeminiResult = (geminiData, fallbackResult) => {
+    const keyMap = {
+      'Cassava Mosaic Disease': 'CMD',
+      'Cassava Brown Streak Disease': 'CBSD',
+      'Cassava Bacterial Blight': 'CBB',
+      'Cassava Green Mite': 'CGM',
+      'Cassava Anthracnose': 'CAD',
+      'Brown Spot Disease': 'CBSD',
+      'Healthy': 'HEALTHY',
+    };
+    const diseaseKey =
+      keyMap[geminiData.disease_name] ||
+      fallbackResult?.diseaseKey ||
+      'UNKNOWN';
+
+    return {
+      success: true,
+      diseaseKey,
+      diseaseName: geminiData.disease_name,
+      confidence: geminiData.confidence,
+      description: geminiData.description,
+      treatment: geminiData.treatment,
+      prevention: geminiData.prevention,
+      severity: geminiData.severity,
+      symptoms: geminiData.symptoms,
+      allProbabilities: fallbackResult?.allProbabilities || {},
+      detection_metrics: fallbackResult?.detection_metrics || {},
+      _offline: true,
+      _enhancedByAI: true,
+    };
+  };
+
+  const analyzeImage = async () => {
+    if (!image) {
+      Toast.show({
+        type: 'error',
+        text1: 'No Image',
+        text2: 'Please take a photo or upload an image first.',
+      });
+      return;
+    }
+
+    setLoading(true);
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+
+    if (isApiReady && isOnline) {
+      try {
+        const { base64: base64Image, preparedUri } = await preprocessImage(image);
+
+        const response = await fetchWithTimeout(API_URL, {
+          method: 'POST',
+          headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+          body: JSON.stringify({ image: base64Image }),
+        });
+
+        if (!response.ok) {
+          let errMsg = 'Analysis failed';
+          try {
+            const errorData = await response.json();
+            errMsg = errorData.error || errMsg;
+          } catch (_) {}
+          throw new Error(errMsg);
+        }
+
+        const result = await response.json();
+
+        if (result.success === false && result.error === 'not_cassava') {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+          Toast.show({
+            type: 'info',
+            text1: 'Not a Cassava Leaf',
+            text2: result.message || 'Please upload a clear image of a cassava leaf.',
+          });
+          setLoading(false);
+          return;
+        }
+
+        if (result.success) {
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          navigateToResult(result, image, preparedUri);
+          setLoading(false);
+          return;
+        }
+
+        throw new Error(result.message || 'Invalid response from server');
+      } catch (error) {
+        console.warn('Online analysis failed, falling back to offline:', error?.message);
+      }
+    }
+
+    if (!offlineReady) {
+      setLoading(false);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Toast.show({
+        type: 'error',
+        text1: 'Offline Unavailable',
+        text2: 'Model not loaded yet. Please check your connection and try again.',
+        visibilityTime: 4000,
+      });
+      return;
+    }
+
+    try {
+      const tfliteResult = await runOfflineInference(image);
+
+      if (tfliteResult.success === false && tfliteResult.error === 'not_cassava') {
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        Toast.show({
+          type: 'info',
+          text1: 'Not a Cassava Leaf',
+          text2: tfliteResult.message,
+          visibilityTime: 4000,
+        });
+        setLoading(false);
+        return;
+      }
+
+      const info = DISEASE_INFO[tfliteResult.diseaseKey];
+      let enriched = {
+        ...tfliteResult,
+        description: info?.description || '',
+        treatment: info?.treatment || '',
+        prevention: info?.prevention || '',
+        severity: info?.severity || 'Unknown',
+        symptoms: info?.symptoms || '',
+      };
+
+      const lowConfidence =
+        typeof tfliteResult.confidence === 'number' &&
+        tfliteResult.confidence < GEMINI_FALLBACK_THRESHOLD;
+
+      if (lowConfidence && isOnline) {
+        Toast.show({
+          type: 'info',
+          text1: 'Enhancing with AI...',
+          text2: 'TFLite was uncertain — checking with Gemini.',
+          visibilityTime: 2000,
+        });
+
+        const geminiResponse = await analyzeCropImage(image);
+
+        if (geminiResponse.success && geminiResponse.data) {
+          enriched = normalizeGeminiResult(geminiResponse.data, tfliteResult);
+
+          Toast.show({
+            type: 'success',
+            text1: 'Enhanced by AI',
+            text2: 'Gemini analyzed your leaf.',
+            visibilityTime: 2000,
+          });
+        } else {
+          Toast.show({
+            type: 'info',
+            text1: 'Offline Result',
+            text2: 'AI enhancement unavailable — using local model.',
+            visibilityTime: 2500,
+          });
+        }
+      } else {
+        Toast.show({
+          type: 'info',
+          text1: 'Offline Result',
+          text2: 'Tap Save on the result to keep it. It uploads when you are online.',
+          visibilityTime: 3000,
+        });
+      }
+
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+
+      navigateToResult(enriched, image, tfliteResult.preparedImageUri);
+    } catch (error) {
+      console.error('Offline inference failed:', error);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      Toast.show({
+        type: 'error',
+        text1: 'Analysis Failed',
+        text2: 'Both online and offline analysis failed. Please try again.',
+        visibilityTime: 5000,
+      });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const takePhoto = async () => {
+    if (cameraRef.current) {
+      try {
+        const photo = await cameraRef.current.takePictureAsync({ quality: 0.9 });
+        setImage(photo.uri);
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      } catch (error) {
+        console.error('Error taking photo:', error);
+      }
+    }
   };
 
   const pickImage = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission Needed', 'Please grant gallery permissions to upload images.');
+      Toast.show({
+        type: 'error',
+        text1: 'Permission Denied',
+        text2: 'Please grant gallery permissions.',
+      });
       return;
     }
-
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
-      quality: 1,
+      quality: 0.9,
     });
-
-    if (!result.canceled) {
-      setImage(result.assets[0].uri);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    }
-  };
-
-  const takePhoto = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Needed', 'Please grant camera permissions to take photos.');
-      return;
-    }
-
-    const result = await ImagePicker.launchCameraAsync({
-      allowsEditing: true,
-      quality: 1,
-    });
-
     if (!result.canceled) {
       setImage(result.assets[0].uri);
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -126,428 +400,400 @@ const ScannerScreen = ({ navigation }) => {
   const removeImage = () => {
     setImage(null);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    Toast.show({
+      type: 'success',
+      text1: 'Image Removed',
+      text2: 'You can take a new photo or upload again.',
+      visibilityTime: 1500,
+    });
   };
 
-  const analyzeImage = async () => {
-    if (!image) {
-      Alert.alert('No Image', 'Please take a photo or upload an image first.');
-      return;
-    }
+  if (!permission) {
+    return <View style={styles.container} />;
+  }
 
-    setLoading(true);
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+  if (!permission.granted) {
+    return (
+      <View style={styles.permissionContainer}>
+        <Ionicons name="camera-outline" size={60} color="#88D982" />
+        <Text style={styles.permissionText}>We need your permission to show the camera</Text>
+        <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
+          <Text style={styles.permissionButtonText}>Grant Permission</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
-    setTimeout(() => {
-      setLoading(false);
-      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-      navigation.navigate('Result', { imageUri: image });
-    }, 2000);
-  };
+  const canAnalyze = !!image && !loading && (isApiReady || offlineReady);
 
-  // Scan line interpolation
-  const scanLineTranslate = scanAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [-150, 150],
-  });
+  let analyzeLabel = 'Analyze Leaf';
+  if (loading) analyzeLabel = 'Analyzing...';
+  else if (!isApiReady && offlineReady) analyzeLabel = 'Analyze Offline';
+  else if (!isApiReady && !offlineReady) analyzeLabel = 'Loading...';
 
   return (
-    <ImageBackground
-      source={backgroundImage}
-      style={styles.backgroundImage}
-      resizeMode="cover"
-    >
-      {/* ===== BLACK FADE OVERLAY ===== */}
-      <View style={styles.overlay} />
-      
-      <SafeAreaView style={styles.container} edges={['top']}>
-        {/* ===== HEADER ===== */}
-        <View style={[styles.header, { backgroundColor: 'rgba(255, 248, 246, 0.92)' }]}>
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => navigation.goBack()}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="chevron-back" size={28} color={colors.onSurface} />
-          </TouchableOpacity>
-          <Text style={[styles.headerText, { color: colors.onSurface }]}>
-            Scan Leaf
+    <SafeAreaView style={styles.container} edges={['top']}>
+      <View style={styles.topBar}>
+        <TouchableOpacity
+          style={styles.topControlBtn}
+          onPress={() => navigation.goBack()}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="arrow-back" size={24} color="#FFFFFF" />
+        </TouchableOpacity>
+        <Text style={styles.topTitle}>Scan Disease</Text>
+        <View style={{ width: 40 }} />
+      </View>
+
+      {apiCheckDone && !isApiReady && (
+        <View style={styles.serverErrorBar}>
+          <Ionicons name="cloud-offline-outline" size={16} color="#FFFFFF" />
+          <Text style={styles.serverErrorText}>
+            Offline Mode {offlineReady ? '' : '(loading model...)'}
           </Text>
-          <TouchableOpacity style={styles.headerAction} activeOpacity={0.7}>
-            <Ionicons name="information-circle-outline" size={24} color={colors.onSurface} />
+          <TouchableOpacity onPress={() => checkApiHealth(0)} style={styles.retryBtn}>
+            <Ionicons name="refresh" size={16} color="#FFFFFF" />
           </TouchableOpacity>
         </View>
+      )}
+      {isApiReady && (
+        <View style={styles.serverConnectedBar}>
+          <Ionicons name="checkmark-circle" size={16} color="#FFFFFF" />
+          <Text style={styles.serverConnectedText}>Server Connected</Text>
+        </View>
+      )}
 
-        <View style={styles.content}>
-          {/* Description - with semi-transparent background for readability */}
-          <View style={styles.descriptionWrapper}>
-            <Text style={styles.description}>
-              Take a clear photo or upload an image of the cassava leaf to detect potential diseases using AI.
+      {!image && (
+        <View style={styles.instructionBanner}>
+          <Ionicons name="leaf-outline" size={18} color="#88D982" />
+          <View style={styles.instructionTextBlock}>
+            <Text style={styles.instructionTitle}>
+              Fit a single cassava leaf inside the corner marks.
+            </Text>
+            <Text style={styles.instructionSub}>
+              Only cassava leaves are supported. Non-cassava leaves will produce unreliable diagnoses.
             </Text>
           </View>
+        </View>
+      )}
 
-          {/* Image Container with Scanner Overlay */}
-          <View style={styles.imageContainer}>
-            {image ? (
-              <>
-                <Image source={{ uri: image }} style={styles.image} />
-                <TouchableOpacity
-                  style={styles.removeButton}
-                  onPress={removeImage}
-                  activeOpacity={0.85}
-                  disabled={loading}
-                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                >
-                  <Ionicons name="close" size={20} color={colors.onPrimary} />
-                </TouchableOpacity>
-              </>
-            ) : (
-              <View style={styles.placeholder}>
-                {/* Scanner Overlay */}
-                <View style={styles.scannerOverlay}>
-                  {/* Top-Left Corner */}
-                  <View style={[styles.corner, styles.cornerTopLeft]} />
-                  {/* Top-Right Corner */}
-                  <View style={[styles.corner, styles.cornerTopRight]} />
-                  {/* Bottom-Left Corner */}
-                  <View style={[styles.corner, styles.cornerBottomLeft]} />
-                  {/* Bottom-Right Corner */}
-                  <View style={[styles.corner, styles.cornerBottomRight]} />
-                  
-                  {/* Animated Scanning Line */}
-                  <Animated.View
-                    style={[
-                      styles.scanLine,
-                      {
-                        transform: [{ translateY: scanLineTranslate }],
-                      },
-                    ]}
-                  />
-                </View>
-
-                {/* Leaf Icon in Center */}
-                <View style={styles.placeholderIconWrapper}>
-                  <View style={styles.placeholderIconBackground}>
-                    <Ionicons name="leaf-outline" size={64} color={colors.primaryFixedDim} />
-                  </View>
-                </View>
-
-                <Text style={styles.placeholderTitle}>Upload a Leaf Image</Text>
-                <Text style={styles.placeholderSubtext}>
-                  Tap the camera or gallery button below to get started
-                </Text>
-              </View>
-            )}
-          </View>
-
-          {loading && (
-            <View style={styles.loadingContainer}>
-              <Text style={styles.loadingText}>Analyzing your leaf…</Text>
-            </View>
+      <View style={styles.mainContent}>
+        <Pressable style={styles.cameraCard} onPress={triggerFocusAnimation}>
+          {image ? (
+            <Image source={{ uri: image }} style={styles.previewImage} resizeMode="cover" />
+          ) : (
+            <CameraView
+              ref={cameraRef}
+              style={styles.camera}
+              facing="back"
+              enableTorch={flashEnabled}
+            />
           )}
 
-          {/* Button Row */}
-          <View style={styles.buttonContainer}>
-            <TouchableOpacity
-              style={[styles.button, styles.cameraButton]}
-              onPress={takePhoto}
-              activeOpacity={0.85}
-              disabled={loading}
-            >
-              <Ionicons name="camera-outline" size={22} color={colors.onPrimary} />
-              <Text style={styles.buttonText}>Take Photo</Text>
+          {image && !loading && (
+            <TouchableOpacity style={styles.removeButton} onPress={removeImage} activeOpacity={0.7}>
+              <Ionicons name="close" size={20} color="#FFFFFF" />
             </TouchableOpacity>
+          )}
 
-            <TouchableOpacity
-              style={[styles.button, styles.galleryButton]}
-              onPress={pickImage}
-              activeOpacity={0.85}
-              disabled={loading}
+          {!image && (
+            <Animated.View
+              style={[
+                styles.cornerOverlay,
+                { transform: [{ scale: cornerFocusAnim }] },
+              ]}
+              pointerEvents="none"
             >
-              <Ionicons name="images-outline" size={22} color={colors.onSecondary} />
-              <Text style={styles.buttonText}>Upload Image</Text>
-            </TouchableOpacity>
+              <View style={[styles.cornerBracket, styles.cornerTopLeft]} />
+              <View style={[styles.cornerBracket, styles.cornerTopRight]} />
+              <View style={[styles.cornerBracket, styles.cornerBottomLeft]} />
+              <View style={[styles.cornerBracket, styles.cornerBottomRight]} />
+            </Animated.View>
+          )}
+        </Pressable>
+
+        {loading && (
+          <View style={styles.statusContainer}>
+            <View style={styles.statusHeader}>
+              <ActivityIndicator size="small" color="#88D982" />
+              <Text style={styles.statusLabel}>Analyzing...</Text>
+            </View>
           </View>
+        )}
 
-          {/* Primary Action */}
+        <View style={styles.controlsContainer}>
+          <TouchableOpacity style={styles.galleryButton} onPress={pickImage} activeOpacity={0.7}>
+            <Ionicons name="images-outline" size={26} color="#FFFFFF" />
+          </TouchableOpacity>
+
           <TouchableOpacity
-            style={[styles.analyzeButton, loading && styles.disabledButton]}
-            onPress={analyzeImage}
-            activeOpacity={0.85}
+            style={styles.shutterButton}
+            onPress={takePhoto}
+            activeOpacity={0.8}
             disabled={loading}
           >
-            <Ionicons name="scan-outline" size={24} color={colors.onPrimary} />
-            <Text style={styles.analyzeButtonText}>
-              {loading ? 'Analyzing…' : 'Analyze Leaf'}
-            </Text>
+            <View style={styles.shutterInner} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.flashButton}
+            onPress={() => setFlashEnabled(!flashEnabled)}
+            activeOpacity={0.7}
+          >
+            <Ionicons
+              name={flashEnabled ? 'flash' : 'flash-outline'}
+              size={26}
+              color="#FFFFFF"
+            />
           </TouchableOpacity>
         </View>
-      </SafeAreaView>
-    </ImageBackground>
+
+        {image && !loading && (
+          <TouchableOpacity
+            style={[styles.analyzeButton, !canAnalyze && styles.analyzeButtonDisabled]}
+            onPress={analyzeImage}
+            activeOpacity={0.85}
+            disabled={!canAnalyze}
+          >
+            <Ionicons name="scan-outline" size={20} color="#FFFFFF" />
+            <Text style={styles.analyzeButtonText}>{analyzeLabel}</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
-  // ===== BACKGROUND IMAGE =====
-  backgroundImage: {
+  container: { flex: 1, backgroundColor: '#0A0A0A' },
+  permissionContainer: {
     flex: 1,
-    width: '100%',
-    height: '100%',
+    backgroundColor: '#0A0A0A',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
   },
-  // ===== BLACK FADE OVERLAY =====
-  overlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.25)', // Slight black fade - adjust opacity as needed
+  permissionText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    textAlign: 'center',
+    marginVertical: 20,
   },
-  container: {
-    flex: 1,
-    backgroundColor: 'transparent',
-    ...(Platform.OS === 'web' ? { height: '100vh', overflow: 'hidden' } : {}),
+  permissionButton: {
+    backgroundColor: '#2E7D32',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 8,
   },
-  // ===== HEADER =====
-  header: {
-    width: '100%',
-    minHeight: HEADER_HEIGHT,
+  permissionButtonText: { color: '#FFFFFF', fontWeight: '600', fontSize: 16 },
+
+  topBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 12,
     paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.05)',
-    backgroundColor: 'rgba(255, 248, 246, 0.92)',
-  },
-  backButton: {
-    padding: 4,
-    minWidth: 40,
-  },
-  headerText: {
-    fontSize: 18,
-    fontWeight: '600',
-    flex: 1,
-    textAlign: 'center',
-    letterSpacing: 0.3,
-  },
-  headerAction: {
-    padding: 4,
-    minWidth: 40,
-    alignItems: 'flex-end',
-  },
-  content: {
-    flex: 1,
-    padding: spacing.marginMobile,
-    alignItems: 'center',
-    paddingBottom: 100,
-  },
-  // ===== DESCRIPTION with background =====
-  descriptionWrapper: {
-    backgroundColor: 'rgba(255, 255, 255, 0.88)',
-    borderRadius: rounded.DEFAULT,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    marginBottom: spacing.xl,
-    width: '100%',
-  },
-  description: {
-    ...typography.bodyMd,
-    color: colors.onSurfaceVariant,
-    textAlign: 'center',
-    lineHeight: 24,
-  },
-  imageContainer: {
-    width: '100%',
-    height: 340,
-    backgroundColor: 'rgba(255, 241, 237, 0.92)',
-    borderRadius: rounded.md,
-    borderWidth: 2,
-    borderColor: colors.primaryFixedDim,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-    marginBottom: spacing.lg,
-    shadowColor: 'rgba(93, 64, 55, 0.08)',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 1,
-    shadowRadius: 4,
-    elevation: 2,
-    position: 'relative',
-  },
-  image: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  removeButton: {
-    position: 'absolute',
-    top: spacing.sm,
-    right: spacing.sm,
-    width: 44,
-    height: 44,
-    borderRadius: rounded.full,
-    backgroundColor: 'rgba(44, 22, 14, 0.55)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    paddingVertical: 12,
+    backgroundColor: '#0A0A0A',
     zIndex: 10,
   },
-  placeholder: {
-    justifyContent: 'center',
+  topControlBtn: { width: 40, height: 40, justifyContent: 'center', alignItems: 'center' },
+  topTitle: { fontSize: 18, fontWeight: '600', color: '#FFFFFF' },
+
+  serverErrorBar: {
+    flexDirection: 'row',
     alignItems: 'center',
-    padding: spacing.lg,
-    width: '100%',
-    height: '100%',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 0, 0, 0.85)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    gap: 8,
+    marginHorizontal: 20,
+    borderRadius: 8,
+    marginTop: 4,
+  },
+  serverConnectedBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(46, 125, 50, 0.95)',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    gap: 8,
+    marginHorizontal: 20,
+    borderRadius: 8,
+    marginTop: 4,
+  },
+  serverErrorText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
+  serverConnectedText: { color: '#FFFFFF', fontSize: 12, fontWeight: '600' },
+  retryBtn: { padding: 4 },
+
+  instructionBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 10,
+    backgroundColor: 'rgba(136, 217, 130, 0.1)',
+    borderColor: 'rgba(136, 217, 130, 0.35)',
+    borderWidth: 1,
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginHorizontal: 20,
+    marginTop: 10,
+  },
+  instructionTextBlock: { flex: 1, gap: 2 },
+  instructionTitle: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: '700',
+    letterSpacing: 0.2,
+  },
+  instructionSub: {
+    color: 'rgba(255, 255, 255, 0.75)',
+    fontSize: 11,
+    lineHeight: 15,
+  },
+
+  mainContent: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 20,
+  },
+
+  cameraCard: {
+    width: width - 40,
+    height: height * 0.55,
+    borderRadius: 24,
+    overflow: 'hidden',
+    backgroundColor: '#000',
+    borderWidth: 1,
+    borderColor: 'rgba(136, 217, 130, 0.3)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 8,
     position: 'relative',
   },
-  // Scanner Overlay
-  scannerOverlay: {
+  camera: { width: '100%', height: '100%' },
+  previewImage: { width: '100%', height: '100%' },
+
+  removeButton: {
     position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
+    top: 12,
+    right: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: 'rgba(0, 0, 0, 0.7)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.3)',
     justifyContent: 'center',
     alignItems: 'center',
+    zIndex: 20,
   },
-  corner: {
+
+  cornerOverlay: {
     position: 'absolute',
-    width: 30,
-    height: 30,
-    borderColor: colors.primaryFixedDim,
+    top: '18%',
+    left: '12%',
+    right: '12%',
+    bottom: '18%',
+  },
+  cornerBracket: {
+    position: 'absolute',
+    width: 26,
+    height: 26,
+    borderColor: 'rgba(255, 255, 255, 0.85)',
   },
   cornerTopLeft: {
-    top: 20,
-    left: 20,
-    borderTopWidth: 4,
-    borderLeftWidth: 4,
+    top: 0,
+    left: 0,
+    borderTopWidth: 2.5,
+    borderLeftWidth: 2.5,
     borderTopLeftRadius: 4,
   },
   cornerTopRight: {
-    top: 20,
-    right: 20,
-    borderTopWidth: 4,
-    borderRightWidth: 4,
+    top: 0,
+    right: 0,
+    borderTopWidth: 2.5,
+    borderRightWidth: 2.5,
     borderTopRightRadius: 4,
   },
   cornerBottomLeft: {
-    bottom: 20,
-    left: 20,
-    borderBottomWidth: 4,
-    borderLeftWidth: 4,
+    bottom: 0,
+    left: 0,
+    borderBottomWidth: 2.5,
+    borderLeftWidth: 2.5,
     borderBottomLeftRadius: 4,
   },
   cornerBottomRight: {
-    bottom: 20,
-    right: 20,
-    borderBottomWidth: 4,
-    borderRightWidth: 4,
+    bottom: 0,
+    right: 0,
+    borderBottomWidth: 2.5,
+    borderRightWidth: 2.5,
     borderBottomRightRadius: 4,
   },
-  scanLine: {
-    position: 'absolute',
-    left: 40,
-    right: 40,
-    height: 2,
-    backgroundColor: 'rgba(136, 217, 130, 0.6)',
-    shadowColor: colors.primaryFixedDim,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.5,
-    shadowRadius: 8,
-    elevation: 4,
-    borderRadius: 2,
-  },
-  placeholderIconWrapper: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: spacing.sm,
-    zIndex: 1,
-  },
-  placeholderIconBackground: {
-    width: 90,
-    height: 90,
-    borderRadius: 45,
-    backgroundColor: 'rgba(255, 255, 255, 0.9)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    borderWidth: 2,
-    borderColor: 'rgba(136, 217, 130, 0.2)',
-  },
-  placeholderTitle: {
-    ...typography.headlineSm,
-    fontSize: 18,
-    color: colors.onSurface,
-    marginTop: spacing.sm,
-    zIndex: 1,
-  },
-  placeholderSubtext: {
-    ...typography.bodyMd,
+
+  statusContainer: { position: 'absolute', top: '50%', marginTop: 20 },
+  statusHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  statusLabel: {
     fontSize: 14,
-    color: colors.onSurfaceVariant,
-    textAlign: 'center',
-    marginTop: spacing.xs,
-    paddingHorizontal: spacing.lg,
-    zIndex: 1,
+    fontWeight: '600',
+    color: '#FFFFFF',
+    letterSpacing: 2,
+    textTransform: 'uppercase',
   },
-  loadingContainer: {
-    paddingVertical: spacing.xs,
-    marginBottom: spacing.sm,
-  },
-  loadingText: {
-    ...typography.labelLg,
-    color: colors.primary,
-  },
-  buttonContainer: {
+
+  controlsContainer: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-    marginBottom: spacing.md,
-    gap: spacing.sm,
-  },
-  button: {
-    flex: 1,
-    flexDirection: 'row',
-    minHeight: MIN_TOUCH,
-    paddingHorizontal: spacing.md,
-    borderRadius: rounded.full,
+    justifyContent: 'space-evenly',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: spacing.xs + 4,
-  },
-  cameraButton: {
-    backgroundColor: colors.primaryContainer,
+    width: '100%',
+    marginTop: 30,
   },
   galleryButton: {
-    backgroundColor: colors.secondary,
+    width: 48,
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 24,
   },
+  flashButton: {
+    width: 48,
+    height: 48,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderRadius: 24,
+  },
+  shutterButton: {
+    width: 78,
+    height: 78,
+    borderRadius: 39,
+    borderWidth: 4,
+    borderColor: '#FFFFFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 4,
+  },
+  shutterInner: { width: '100%', height: '100%', borderRadius: 35, backgroundColor: '#FFFFFF' },
+
   analyzeButton: {
-    backgroundColor: colors.primaryContainer,
-    flexDirection: 'row',
-    minHeight: MIN_TOUCH,
-    paddingHorizontal: spacing.lg,
-    borderRadius: rounded.full,
+    marginTop: 20,
     width: '100%',
+    maxWidth: width - 40,
+    backgroundColor: '#2E7D32',
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: spacing.sm,
-    shadowColor: 'rgba(93, 64, 55, 0.12)',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 1,
-    shadowRadius: 12,
-    elevation: 6,
+    paddingVertical: 16,
+    borderRadius: 12,
+    gap: 10,
   },
-  disabledButton: {
-    opacity: 0.6,
-  },
-  buttonText: {
-    ...typography.labelLg,
-    color: colors.onPrimary,
-  },
-  analyzeButtonText: {
-    ...typography.labelLg,
-    fontSize: 16,
-    color: colors.onPrimary,
-  },
+  analyzeButtonDisabled: { backgroundColor: '#666666', opacity: 0.85 },
+  analyzeButtonText: { color: '#FFFFFF', fontWeight: '700', fontSize: 16 },
 });
 
 export default ScannerScreen;

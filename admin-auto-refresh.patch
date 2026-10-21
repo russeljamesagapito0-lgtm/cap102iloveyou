@@ -1,0 +1,187 @@
+From 92d63fac45b12d019d994dc8fb8d2e12ab12401a Mon Sep 17 00:00:00 2001
+From: claude <c@x>
+Date: Mon, 12 Oct 2026 22:48:22 +0000
+Subject: [PATCH] Admin: auto-refresh scans (10s polling + optional Realtime)
+
+---
+ admin/src/lib/useAutoRefresh.js        | 45 ++++++++++++++++++++++++++
+ admin/src/pages/Scans.js               | 18 ++++++++++-
+ admin/src/pages/Users.js               | 33 ++++++++++++++++++-
+ supabase/sql/enable_realtime_scans.sql | 11 +++++++
+ 4 files changed, 105 insertions(+), 2 deletions(-)
+ create mode 100644 admin/src/lib/useAutoRefresh.js
+ create mode 100644 supabase/sql/enable_realtime_scans.sql
+
+diff --git a/admin/src/lib/useAutoRefresh.js b/admin/src/lib/useAutoRefresh.js
+new file mode 100644
+index 0000000..fc30e92
+--- /dev/null
++++ b/admin/src/lib/useAutoRefresh.js
+@@ -0,0 +1,45 @@
++import { useEffect, useRef } from 'react';
++import { supabase } from './supabase';
++
++/**
++ * Keeps a page's data fresh without a manual reload.
++ *  - polls every `intervalMs` (only while the browser tab is visible), and
++ *  - if `table` is given, also refreshes within ~0.5s of any INSERT/UPDATE/DELETE on it
++ *    via Supabase Realtime (needs the table in the supabase_realtime publication; if it
++ *    isn't, polling alone still keeps the page updated).
++ * `refresh` should be a SILENT refetch (no loading spinner) so the screen doesn't flicker.
++ */
++export default function useAutoRefresh(refresh, { intervalMs = 10000, table = null } = {}) {
++  const refreshRef = useRef(refresh);
++  refreshRef.current = refresh;
++
++  useEffect(() => {
++    let debounce = null;
++    const run = () => {
++      if (document.visibilityState === 'visible') {
++        Promise.resolve(refreshRef.current()).catch(() => {});
++      }
++    };
++
++    const timer = setInterval(run, intervalMs);
++    document.addEventListener('visibilitychange', run); // catch up when returning to the tab
++
++    let channel = null;
++    if (table) {
++      channel = supabase
++        .channel(`auto-refresh-${table}-${Math.random().toString(36).slice(2)}`)
++        .on('postgres_changes', { event: '*', schema: 'public', table }, () => {
++          clearTimeout(debounce);
++          debounce = setTimeout(run, 500);
++        })
++        .subscribe();
++    }
++
++    return () => {
++      clearInterval(timer);
++      clearTimeout(debounce);
++      document.removeEventListener('visibilitychange', run);
++      if (channel) supabase.removeChannel(channel);
++    };
++  }, [intervalMs, table]);
++}
+diff --git a/admin/src/pages/Scans.js b/admin/src/pages/Scans.js
+index 3f62f7c..16c3885 100644
+--- a/admin/src/pages/Scans.js
++++ b/admin/src/pages/Scans.js
+@@ -1,8 +1,9 @@
+-import { useState, useEffect, useMemo } from 'react';
++import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+ import { useSearchParams } from 'react-router-dom';
+ import Badge from '../components/Badge';
+ import Modal from '../components/Modal';
+ import ScanImage from '../components/ScanImage';
++import useAutoRefresh from '../lib/useAutoRefresh';
+ import { useConfirm } from '../components/ConfirmDialog';
+ import { useToast } from '../context/ToastContext';
+ import { downloadCsv } from '../lib/csv';
+@@ -63,6 +64,20 @@ export default function Scans() {
+   const [newLabel, setNewLabel] = useState('');
+   const confirm = useConfirm();
+   const toast = useToast();
++  const namesRef = useRef(null); // disease code -> name, set once the first load has it
++
++  // Silent refetch (no spinner) used by the auto-refresh below
++  const refreshScans = useCallback(async () => {
++    if (!namesRef.current) return; // first load not finished yet
++    const { data, error } = await supabase
++      .from('scans')
++      .select('*, profiles(full_name,email)')
++      .order('created_at', { ascending: false })
++      .limit(1000);
++    if (!error && data) setScans(data.map((s) => buildScanObject(s, namesRef.current)));
++  }, []);
++
++  useAutoRefresh(refreshScans, { intervalMs: 10000, table: 'scans' });
+ 
+   useEffect(() => {
+     (async () => {
+@@ -73,6 +88,7 @@ export default function Scans() {
+ 
+       const names = Object.fromEntries((d || []).map((x) => [x.code, x.name]));
+       setDiseases(d || []);
++      namesRef.current = names;
+ 
+       const { data: p } = await supabase
+         .from('profiles')
+diff --git a/admin/src/pages/Users.js b/admin/src/pages/Users.js
+index db8f945..5647aeb 100644
+--- a/admin/src/pages/Users.js
++++ b/admin/src/pages/Users.js
+@@ -1,7 +1,8 @@
+-import { useState, useEffect, useMemo } from 'react';
++import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+ import Modal from '../components/Modal';
+ import Badge from '../components/Badge';
+ import ScanImage from '../components/ScanImage';
++import useAutoRefresh from '../lib/useAutoRefresh';
+ import { useConfirm } from '../components/ConfirmDialog';
+ import { useToast } from '../context/ToastContext';
+ import { downloadCsv } from '../lib/csv';
+@@ -191,6 +192,35 @@ export default function Users() {
+   const confirm = useConfirm();
+   const toast = useToast();
+ 
++  // Silent auto-refresh: user list (with scan counts) + the open user's scans
++  const selectedIdRef = useRef(null);
++  useEffect(() => { selectedIdRef.current = selected?.id || null; }, [selected]);
++  const diseaseNamesRef = useRef({});
++
++  const refreshAll = useCallback(async () => {
++    const { data: prof, error: profError } = await supabase
++      .from('profiles')
++      .select('*, scans(count)')
++      .order('created_at', { ascending: false });
++    if (!profError && prof) setUsers(prof.map(mapProfile));
++
++    const uid = selectedIdRef.current;
++    if (uid) {
++      const { data, error } = await supabase
++        .from('scans')
++        .select('*')
++        .eq('user_id', uid)
++        .order('created_at', { ascending: false })
++        .limit(500);
++      if (!error && data) {
++        const fresh = data.map((s) => buildScan(s, diseaseNamesRef.current));
++        setScanCache((prev) => ({ ...prev, [uid]: fresh }));
++      }
++    }
++  }, []);
++
++  useAutoRefresh(refreshAll, { intervalMs: 10000, table: 'scans' });
++
+   useEffect(() => {
+     supabase
+       .from('profiles')
+@@ -223,6 +253,7 @@ export default function Users() {
+     () => Object.fromEntries(diseases.map((d) => [d.code, d.name])),
+     [diseases]
+   );
++  diseaseNamesRef.current = diseaseNames;
+ 
+   const openUser = async (u) => {
+     setSelected(u);
+diff --git a/supabase/sql/enable_realtime_scans.sql b/supabase/sql/enable_realtime_scans.sql
+new file mode 100644
+index 0000000..793ff54
+--- /dev/null
++++ b/supabase/sql/enable_realtime_scans.sql
+@@ -0,0 +1,11 @@
++-- Optional: instant admin updates (otherwise the admin panel polls every 10 s).
++-- Realtime respects RLS, so admins only receive changes the s_sel policy lets them read.
++do $$
++begin
++  if not exists (
++    select 1 from pg_publication_tables
++    where pubname = 'supabase_realtime' and schemaname = 'public' and tablename = 'scans'
++  ) then
++    alter publication supabase_realtime add table public.scans;
++  end if;
++end $$;
+-- 
+2.43.0
+

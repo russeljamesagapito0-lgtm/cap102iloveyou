@@ -1,0 +1,766 @@
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import PageHeader from '../components/PageHeader';
+import Modal from '../components/Modal';
+import Pager from '../components/Pager';
+import usePagination from '../lib/usePagination';
+import Badge from '../components/Badge';
+import ScanImage from '../components/ScanImage';
+import useAutoRefresh from '../lib/useAutoRefresh';
+import { useConfirm } from '../components/ConfirmDialog';
+import { useToast } from '../context/ToastContext';
+import { downloadCsv } from '../lib/csv';
+import { supabase, fmtDate, logAudit, fetchPages } from '../lib/supabase';
+
+const SCANS_PER_PAGE = 8;
+const USERS_PER_PAGE = 10;
+
+const mapProfile = (p) => ({
+  id: p.id,
+  name: p.full_name || 'Unnamed',
+  email: p.email || '-',
+  scans: p.scans?.[0]?.count ?? 0,
+  lastActive: fmtDate(p.last_active_at),
+  status: p.status,
+});
+
+const statusClass = (status) =>
+  'status-text ' + (status === 'active' ? 'status-active' : 'status-suspended');
+
+const confidenceClass = (c) => {
+  if (c >= 0.8) return 'confidence confidence-high';
+  if (c >= 0.6) return 'confidence confidence-mid';
+  return 'confidence confidence-low';
+};
+
+const buildScan = (s, names) => ({
+  id: s.id,
+  code: s.disease_code,
+  predicted: s.predicted_code,
+  disease: names[s.disease_code] || s.disease_code || 'Unknown',
+  confidence: Number(s.confidence ?? 0),
+  date: fmtDate(s.created_at),
+  region: s.region || '-',
+  image_url: s.image_url,
+  image_path: s.image_path,
+  flagged: s.flagged,
+  corrected: s.corrected,
+});
+
+const toUserBackupRows = (profile, scans) => {
+  const rows = [
+    {
+      section: 'profile',
+      id: profile.id,
+      email: profile.email,
+      full_name: profile.full_name,
+      role: profile.role,
+      status: profile.status,
+      last_active_at: profile.last_active_at,
+      created_at: profile.created_at,
+      disease_code: '',
+      predicted_code: '',
+      confidence: '',
+      region: '',
+      flagged: '',
+      corrected: '',
+      scan_created_at: '',
+      image_url: '',
+    },
+  ];
+
+  for (const s of scans) {
+    rows.push({
+      section: 'scan',
+      id: s.id,
+      email: '',
+      full_name: '',
+      role: '',
+      status: '',
+      last_active_at: '',
+      created_at: '',
+      disease_code: s.disease_code,
+      predicted_code: s.predicted_code,
+      confidence: s.confidence,
+      region: s.region,
+      flagged: s.flagged,
+      corrected: s.corrected,
+      scan_created_at: s.created_at,
+      image_url: s.image_url,
+    });
+  }
+
+  return rows;
+};
+
+const toGlobalBackupRows = (profiles, scans) => {
+  const rows = [];
+
+  for (const p of profiles) {
+    rows.push({
+      section: 'profile',
+      id: p.id,
+      email: p.email,
+      full_name: p.full_name,
+      role: p.role,
+      status: p.status,
+      last_active_at: p.last_active_at,
+      created_at: p.created_at,
+      disease_code: '',
+      predicted_code: '',
+      confidence: '',
+      region: '',
+      flagged: '',
+      corrected: '',
+      scan_created_at: '',
+      image_url: '',
+    });
+  }
+
+  rows.push({
+    section: '--- scans below ---',
+    id: '',
+    email: '',
+    full_name: '',
+    role: '',
+    status: '',
+    last_active_at: '',
+    created_at: '',
+    disease_code: '',
+    predicted_code: '',
+    confidence: '',
+    region: '',
+    flagged: '',
+    corrected: '',
+    scan_created_at: '',
+    image_url: '',
+  });
+
+  for (const s of scans) {
+    rows.push({
+      section: 'scan',
+      id: s.id,
+      email: '',
+      full_name: '',
+      role: '',
+      status: '',
+      last_active_at: '',
+      created_at: '',
+      disease_code: s.disease_code,
+      predicted_code: s.predicted_code,
+      confidence: s.confidence,
+      region: s.region,
+      flagged: s.flagged,
+      corrected: s.corrected,
+      scan_created_at: s.created_at,
+      image_url: s.image_url,
+    });
+  }
+
+  return rows;
+};
+
+const slugify = (s) =>
+  (s || 'user').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+
+const datedName = (base) => {
+  const date = new Date().toISOString().slice(0, 10);
+  return `${base}_${date}.csv`;
+};
+
+export default function Users() {
+  const [users, setUsers] = useState([]);
+  const [query, setQuery] = useState('');
+  const [view, setView] = useState('active');
+  const [selected, setSelected] = useState(null);
+  const [busy, setBusy] = useState(false);
+
+  const [scanCache, setScanCache] = useState({});
+  const [diseases, setDiseases] = useState([]);
+  const [loadingScans, setLoadingScans] = useState(false);
+  const [scanVisibleCount, setScanVisibleCount] = useState(SCANS_PER_PAGE);
+  const [reviewTarget, setReviewTarget] = useState(null);
+  const [newLabel, setNewLabel] = useState('');
+
+  const confirm = useConfirm();
+  const toast = useToast();
+
+  const selectedIdRef = useRef(null);
+  useEffect(() => { selectedIdRef.current = selected?.id || null; }, [selected]);
+  const diseaseNamesRef = useRef({});
+
+  const refreshAll = useCallback(async () => {
+    try {
+      const prof = await fetchPages(() =>
+        supabase
+          .from('profiles')
+          .select('*, scans(count)')
+          .order('created_at', { ascending: false })
+          .order('id')
+      );
+      setUsers(prof.map(mapProfile));
+    } catch (e) {
+    }
+
+    const uid = selectedIdRef.current;
+    if (uid) {
+      try {
+        const data = await fetchPages(() =>
+          supabase
+            .from('scans')
+            .select('*')
+            .eq('user_id', uid)
+            .order('created_at', { ascending: false })
+            .order('id')
+        );
+        const fresh = data.map((s) => buildScan(s, diseaseNamesRef.current));
+        setScanCache((prev) => ({ ...prev, [uid]: fresh }));
+      } catch (e) {
+      }
+    }
+  }, []);
+
+  useAutoRefresh(refreshAll, { intervalMs: 10000, table: 'scans' });
+
+  useEffect(() => {
+    fetchPages(() =>
+      supabase
+        .from('profiles')
+        .select('*, scans(count)')
+        .order('created_at', { ascending: false })
+        .order('id')
+    )
+      .then((data) => setUsers(data.map(mapProfile)))
+      .catch(() => setUsers([]));
+
+    supabase
+      .from('diseases')
+      .select('code,name')
+      .order('name')
+      .then(({ data }) => setDiseases(data || []));
+  }, []);
+
+  const activeCount = users.filter((u) => u.status === 'active').length;
+  const suspendedCount = users.filter((u) => u.status === 'suspended').length;
+
+  const visibleUsers = useMemo(() => {
+    const q = query.toLowerCase();
+    return users.filter((u) => {
+      if (u.status !== view) return false;
+      if (!q) return true;
+      return (
+        u.name.toLowerCase().includes(q) || u.email.toLowerCase().includes(q)
+      );
+    });
+  }, [users, view, query]);
+
+  const userPager = usePagination(visibleUsers, USERS_PER_PAGE, `${view}|${query}`);
+
+  const diseaseNames = useMemo(
+    () => Object.fromEntries(diseases.map((d) => [d.code, d.name])),
+    [diseases]
+  );
+  diseaseNamesRef.current = diseaseNames;
+
+  const openUser = async (u) => {
+    setSelected(u);
+    setScanVisibleCount(SCANS_PER_PAGE);
+
+    if (!scanCache[u.id]) {
+      setLoadingScans(true);
+      try {
+        const data = await fetchPages(() =>
+          supabase
+            .from('scans')
+            .select('*')
+            .eq('user_id', u.id)
+            .order('created_at', { ascending: false })
+            .order('id')
+        );
+        const scans = data.map((s) => buildScan(s, diseaseNames));
+        setScanCache((prev) => ({ ...prev, [u.id]: scans }));
+      } catch (e) {
+        toast.error('Failed to load scans: ' + e.message);
+      } finally {
+        setLoadingScans(false);
+      }
+    }
+  };
+
+  const closeUser = () => {
+    setSelected(null);
+    setReviewTarget(null);
+    setNewLabel('');
+  };
+
+  const toggleStatus = async () => {
+    if (!selected) return;
+
+    const isActive = selected.status === 'active';
+    const nextStatus = isActive ? 'suspended' : 'active';
+
+    const ok = await confirm({
+      title: isActive ? 'Suspend user?' : 'Reactivate user?',
+      message: isActive
+        ? `${selected.name} will lose access to RootCare until reactivated.`
+        : `${selected.name} will regain access to RootCare.`,
+      confirmText: isActive ? 'Suspend' : 'Reactivate',
+      tone: isActive ? 'danger' : 'primary',
+    });
+
+    if (!ok) return;
+
+    const { error } = await supabase
+      .from('profiles')
+      .update({ status: nextStatus })
+      .eq('id', selected.id);
+
+    if (error) {
+      toast.error('Failed to update user: ' + error.message);
+      return;
+    }
+
+    logAudit(isActive ? 'suspend' : 'reactivate', 'user', selected.id, {
+      email: selected.email,
+    });
+
+    setUsers((prev) =>
+      prev.map((u) => (u.id === selected.id ? { ...u, status: nextStatus } : u))
+    );
+
+    toast.success(isActive ? 'User suspended' : 'User reactivated', {
+      description: selected.name,
+    });
+
+    setSelected((prev) => (prev ? { ...prev, status: nextStatus } : prev));
+  };
+
+  const exportUsers = () => {
+    const rows = visibleUsers.map((u) => ({
+      name: u.name,
+      email: u.email,
+      scans: u.scans,
+      last_active: u.lastActive,
+      status: u.status,
+    }));
+    downloadCsv(datedName(`users_${view}`), rows);
+    logAudit('export.users', 'user', null, { view, count: rows.length });
+  };
+
+  const backupUser = async () => {
+    if (!selected) return;
+
+    const ok = await confirm({
+      title: `Backup ${selected.name}?`,
+      message:
+        'This will download a CSV containing this user’s profile and scan history. Handle the file carefully.',
+      confirmText: 'Download',
+      tone: 'primary',
+    });
+    if (!ok) return;
+
+    setBusy(true);
+    try {
+      const { data: profile, error: pErr } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('id', selected.id)
+        .single();
+      if (pErr) throw pErr;
+
+      const scans = await fetchPages(
+        () =>
+          supabase
+            .from('scans')
+            .select('*')
+            .eq('user_id', selected.id)
+            .order('created_at', { ascending: false })
+            .order('id'),
+        { max: Infinity }
+      );
+
+      const rows = toUserBackupRows(profile, scans);
+      downloadCsv(datedName(`user_${slugify(selected.name)}`), rows);
+      logAudit('backup.user', 'user', selected.id, {
+        scans: scans.length,
+        email: selected.email,
+      });
+      toast.success('Backup downloaded', {
+        description: `${scans.length} scans`,
+      });
+    } catch (e) {
+      toast.error('Backup failed: ' + (e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const backupAll = async () => {
+    const ok = await confirm({
+      title: 'Backup all users and scans?',
+      message:
+        'This will download a CSV containing every profile and every scan in the system. This file may be large. Handle it carefully.',
+      confirmText: 'Download',
+      tone: 'primary',
+    });
+    if (!ok) return;
+
+    setBusy(true);
+    try {
+      const profiles = await fetchPages(
+        () => supabase.from('profiles').select('*').order('created_at').order('id'),
+        { max: Infinity }
+      );
+      const scans = await fetchPages(
+        () => supabase.from('scans').select('*').order('created_at').order('id'),
+        { max: Infinity }
+      );
+
+      const rows = toGlobalBackupRows(profiles, scans);
+      downloadCsv(datedName('rootcare_full_backup'), rows);
+      logAudit('backup.all', 'backup', null, {
+        profiles: profiles.length,
+        scans: scans.length,
+      });
+      toast.success('Full backup downloaded', {
+        description: `${profiles.length} users · ${scans.length} scans`,
+      });
+    } catch (e) {
+      toast.error('Backup failed: ' + (e?.message || e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const openReview = (scan) => {
+    setReviewTarget(scan);
+    setNewLabel(scan.code || '');
+  };
+
+  const closeReview = () => {
+    setReviewTarget(null);
+    setNewLabel('');
+  };
+
+  const saveCorrection = async () => {
+    if (!reviewTarget || !selected) return;
+
+    const newName = diseaseNames[newLabel] || newLabel;
+
+    const ok = await confirm({
+      title: 'Save correction?',
+      message: `Change the label from "${reviewTarget.disease}" to "${newName}"? This will be logged in the audit trail.`,
+      confirmText: 'Save',
+      tone: 'primary',
+    });
+
+    if (!ok) return;
+
+    const { error } = await supabase
+      .from('scans')
+      .update({
+        predicted_code: reviewTarget.predicted || reviewTarget.code,
+        disease_code: newLabel,
+        flagged: false,
+        corrected: true,
+      })
+      .eq('id', reviewTarget.id);
+
+    if (error) {
+      toast.error('Failed to save correction: ' + error.message);
+      return;
+    }
+
+    logAudit('update', 'scan', reviewTarget.id, {
+      from: reviewTarget.code,
+      to: newLabel,
+    });
+
+    setScanCache((prev) => {
+      const userScans = prev[selected.id] || [];
+      const updated = userScans.map((s) =>
+        s.id === reviewTarget.id
+          ? {
+              ...s,
+              predicted: s.predicted || s.code,
+              code: newLabel,
+              disease: newName,
+              flagged: false,
+              corrected: true,
+            }
+          : s
+      );
+      return { ...prev, [selected.id]: updated };
+    });
+
+    toast.success('Correction saved', { description: newName });
+    closeReview();
+  };
+
+  const selectedIsActive = selected?.status === 'active';
+  const selectedScans = selected ? scanCache[selected.id] || [] : [];
+  const visibleScans = selectedScans.slice(0, scanVisibleCount);
+  const hasMoreScans = selectedScans.length > scanVisibleCount;
+
+  const emptyMessage =
+    view === 'active'
+      ? query
+        ? 'No active users match your search.'
+        : 'No active users.'
+      : query
+      ? 'No suspended users match your search.'
+      : 'No suspended accounts.';
+
+  return (
+    <>
+      <PageHeader
+        title="Users"
+        subtitle={`${activeCount} active · ${suspendedCount} suspended`}
+      />
+
+      <div className="stack-lg">
+        <div className="flex-between">
+          <div className="filter-bar">
+            <button
+              className={'filter-btn' + (view === 'active' ? ' active' : '')}
+              onClick={() => setView('active')}
+            >
+              Active ({activeCount})
+            </button>
+            <button
+              className={'filter-btn' + (view === 'suspended' ? ' active' : '')}
+              onClick={() => setView('suspended')}
+            >
+              Suspended ({suspendedCount})
+            </button>
+          </div>
+
+          <div className="flex-center" style={{ gap: 10 }}>
+            <input
+              className="input"
+              style={{ width: 280 }}
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search by name or email..."
+            />
+            <button className="btn btn-outline btn-sm" onClick={exportUsers}>
+              Export {view}
+            </button>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={backupAll}
+              disabled={busy}
+            >
+              {busy ? 'Preparing…' : 'Backup all'}
+            </button>
+          </div>
+        </div>
+
+        <div className="table-wrapper">
+          <table className="table">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Email</th>
+                <th className="text-right">Scans</th>
+                <th>Last active</th>
+                <th>Status</th>
+                <th className="text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {userPager.pageItems.map((u) => (
+                <tr key={u.id}>
+                  <td className="cell-strong">{u.name}</td>
+                  <td className="cell-muted">{u.email}</td>
+                  <td className="text-right">{u.scans}</td>
+                  <td className="cell-muted">{u.lastActive}</td>
+                  <td className={statusClass(u.status)}>{u.status}</td>
+                  <td className="text-right">
+                    <button className="link-btn" onClick={() => openUser(u)}>
+                      Manage
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {visibleUsers.length === 0 && (
+                <tr>
+                  <td colSpan="6" className="text-center text-muted">
+                    {emptyMessage}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
+        <Pager pager={userPager} />
+
+        <Modal
+          open={!!selected}
+          onClose={closeUser}
+          title={selected ? `Manage ${selected.name}` : ''}
+          footer={
+            <>
+              <button
+                className="btn btn-outline"
+                onClick={backupUser}
+                disabled={busy}
+              >
+                {busy ? 'Preparing…' : 'Backup user'}
+              </button>
+              <button className="btn btn-outline" onClick={closeUser}>
+                Close
+              </button>
+              <button
+                className={'btn ' + (selectedIsActive ? 'btn-danger' : 'btn-primary')}
+                onClick={toggleStatus}
+              >
+                {selectedIsActive ? 'Suspend user' : 'Reactivate user'}
+              </button>
+            </>
+          }
+        >
+          {selected && (
+            <div className="user-manage-body">
+              <div>
+                <div className="info-row">
+                  <span className="info-row-label">Email</span>
+                  <span className="info-row-value">{selected.email}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-row-label">Total scans</span>
+                  <span className="info-row-value">{selected.scans}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-row-label">Last active</span>
+                  <span className="info-row-value">{selected.lastActive}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-row-label">Status</span>
+                  <span className={statusClass(selected.status)}>{selected.status}</span>
+                </div>
+              </div>
+
+              <div className="scan-section">
+                <div className="scan-section-header">
+                  <span className="scan-section-title">Scans</span>
+                  {selectedScans.length > 0 && (
+                    <span className="scan-section-count">
+                      {selectedScans.length}
+                    </span>
+                  )}
+                </div>
+
+                {loadingScans ? (
+                  <p className="text-muted" style={{ fontSize: 13 }}>
+                    Loading scans…
+                  </p>
+                ) : selectedScans.length === 0 ? (
+                  <p className="text-muted" style={{ fontSize: 13 }}>
+                    This user has no scans yet.
+                  </p>
+                ) : (
+                  <>
+                    <div className="scan-mini-grid">
+                      {visibleScans.map((s) => (
+                        <div key={s.id} className="scan-mini-card">
+                          <div className="scan-mini-thumb">
+                            <ScanImage scan={s} fallback={s.disease} />
+                          </div>
+                          <div className="scan-mini-body">
+                            <div className="scan-title-row">
+                              <span className="scan-title">{s.disease}</span>
+                              {s.flagged && <Badge color="red">flagged</Badge>}
+                              {s.corrected && <Badge color="blue">corrected</Badge>}
+                            </div>
+                            <div className="scan-mini-footer">
+                              <span className={confidenceClass(s.confidence)}>
+                                {(s.confidence * 100).toFixed(0)}%
+                              </span>
+                              <button
+                                className="link-btn"
+                                onClick={() => openReview(s)}
+                              >
+                                Review
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    {hasMoreScans && (
+                      <button
+                        className="btn btn-outline btn-sm"
+                        onClick={() => setScanVisibleCount((c) => c + SCANS_PER_PAGE)}
+                        style={{ marginTop: 12 }}
+                      >
+                        Load {Math.min(SCANS_PER_PAGE, selectedScans.length - scanVisibleCount)} more
+                      </button>
+                    )}
+                  </>
+                )}
+              </div>
+            </div>
+          )}
+        </Modal>
+
+        <Modal
+          open={!!reviewTarget}
+          onClose={closeReview}
+          title="Review scan"
+          footer={
+            <>
+              <button className="btn btn-outline" onClick={closeReview}>
+                Cancel
+              </button>
+              <button className="btn btn-primary" onClick={saveCorrection}>
+                Save correction
+              </button>
+            </>
+          }
+        >
+          {reviewTarget && (
+            <div className="stack-md">
+              <div className="scan-thumb scan-thumb-lg">
+                <ScanImage scan={reviewTarget} fallback={reviewTarget.disease} />
+              </div>
+
+              <div>
+                <div className="info-row">
+                  <span className="info-row-label">Region</span>
+                  <span className="info-row-value">{reviewTarget.region}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-row-label">Date</span>
+                  <span className="info-row-value">{reviewTarget.date}</span>
+                </div>
+                <div className="info-row">
+                  <span className="info-row-label">AI predicted</span>
+                  <span className="info-row-value">
+                    {reviewTarget.disease} (
+                    {(reviewTarget.confidence * 100).toFixed(0)}%)
+                  </span>
+                </div>
+              </div>
+
+              <div>
+                <label className="label">Correct label</label>
+                <select
+                  className="input"
+                  value={newLabel}
+                  onChange={(e) => setNewLabel(e.target.value)}
+                >
+                  {diseases.map((d) => (
+                    <option key={d.code} value={d.code}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+          )}
+        </Modal>
+      </div>
+    </>
+  );
+}
